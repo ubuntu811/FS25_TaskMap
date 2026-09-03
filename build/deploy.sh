@@ -10,11 +10,14 @@ TARGET_DIR_NAME="$HOME/fs25/mods/${MOD_NAME}"
 
 echo "=== Starting FS25 Hot-Reload Deployment Pipeline ==="
 
-# 1. Verify that a fresh production zip exists
-if [ ! -f "$SOURCE_ZIP" ]; then
-    if [ -f "./build.sh" ]; then
-        ./build.sh
-    fi
+# 1. Always rebuild first - real bug found live tonight: the old
+# "only build if the zip is missing" version silently deployed a stale
+# zip from before a source edit whenever one already happened to exist,
+# same class of bug already caught once tonight on the map mods'
+# deploy.sh. Unconditional now, matching that fix - build.sh's own cost
+# is small, there's no real reason to skip it.
+if [ -f "build/build.sh" ]; then
+    bash build/build.sh
 fi
 
 rm -rf ${TARGET_DIR_NAME}

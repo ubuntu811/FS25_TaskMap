@@ -48,6 +48,35 @@ TaskMap = {}
 -- something actually changes, this is just the reliable baseline.
 TaskMap.REDRAW_INTERVAL = 3000
 
+-- Separate, longer interval - a trail scan (WailaTrailTracer.scanRegion)
+-- is real per-tile terrain sampling work, not a cheap index readback
+-- like the job-hotspot rebuild above. First-version scope is a bounded
+-- radius around the player (see WailaTrailTracer's own comment on why),
+-- so this only ever needs to re-run occasionally, not on the same
+-- cadence as the job labels.
+TaskMap.TRAIL_SCAN_INTERVAL = 15000
+-- Bold, maximally-distinct debug colors, not a polished final palette -
+-- this is drawDebugLine output meant to answer "is the sweep classifying
+-- path vs area correctly," not something meant to look good on a real
+-- map. Muted tan/gray (the original choice) both read as the same
+-- off-white blur at a distance - yellow/magenta don't occur naturally in
+-- terrain, so neither can be mistaken for the other or for scenery.
+TaskMap.TRAIL_PATH_COLOR = { 1, 1, 0 }
+TaskMap.TRAIL_AREA_COLOR = { 1, 0, 1 }
+
+-- Real hang found live: addDots creates one actual MapHotspot GUI object
+-- per point, no cap anywhere. WailaTrailTracer's own Douglas-Peucker
+-- simplification has no hard output-size limit either -- a messy,
+-- non-converging area trace (real, logged case: "unable to close
+-- boundary loop, giving up at 15001 positions") isn't guaranteed to
+-- simplify down to anything small, since a wildly irregular boundary can
+-- have plenty of large, "significant" deviations the simplifier judges
+-- worth keeping. Result: thousands of synchronous addMapHotspot calls in
+-- one frame, game frozen with no error logged at all (silence after the
+-- scan-summary print line was the only symptom). This cap is the actual
+-- safety net, independent of whatever produces an oversized point list.
+TaskMap.MAX_TRAIL_DOTS = 500
+
 -- Fixed color rather than the owning farm's color (tried first, matching
 -- FarmlandHotspot's own field-number text) -- farm colors are player-
 -- chosen and land in the green/brown range a farm map already is half the
@@ -64,6 +93,8 @@ function TaskMap.new()
     self.activeHotspots = {}
     self.redrawTimer = 0
     self.subscribedToEvents = false
+    self.trailScanTimer = 0
+    self.activeTrailHotspots = {}
     return self
 end
 
@@ -138,6 +169,141 @@ function TaskMap:onVehicleLeftField(vehicleOrPlayer, entry)
     self:rebuildAllHotspots()
 end
 
+-- First version: reads the player's own current world position as the
+-- scan center (matches WailaTrailTracer.scanRegion's own bounded-radius
+-- scope) - not the camera/map-cursor position, since the player is who
+-- actually cares "what's worn near me right now." Falls through to a
+-- no-op if the player entity isn't available yet (same defensive shape
+-- as rebuildAllHotspots' own g_currentMission.waila nil-guard).
+-- g_currentMission.player.rootNode was never real -- confirmed live
+-- (always nil, never resolving no matter how long the session ran).
+-- g_localPlayer:getPosition() is the actual, confirmed-real API (same
+-- one FieldManager.getFieldIdAtPlayerPosition itself uses internally,
+-- per the base game's own decompiled source), no rootNode lookup at all.
+function TaskMap:getScanCenter()
+    if g_localPlayer == nil then
+        return nil
+    end
+
+    local x, _, z = g_localPlayer:getPosition()
+    return x, z
+end
+
+-- Clears every currently-shown trail dot and redraws from a fresh
+-- WailaTrailTracer.scanRegion result - same wipe-and-rebuild shape
+-- rebuildAllHotspots already uses for job labels. One dot per already-
+-- simplified path/area point (see WailaTrailTracer's own comment on why
+-- dots, not connected rotated segments, for this first version).
+-- TEMPORARY diagnostics throughout this function - "did we detect
+-- anything at all" debug pass, matching WailaTrailTracer.scanRegion's
+-- own new logging. Every early-return below now logs WHY, so a silent
+-- "no dots ever appeared" report can actually be traced to a specific
+-- cause instead of guessed at.
+function TaskMap:rebuildTrailHotspots()
+    -- Real bug found live: the bare WailaTrailTracer global is never nil
+    -- because of timing -- it's PERMANENTLY invisible from this mod,
+    -- because WAILA's own WailaTrailTracer.lua declares it as a bare
+    -- top-level global (only exists inside WAILA's own mod sandbox),
+    -- never published for cross-mod use. Same rule as every other WAILA
+    -- API this file already reads via g_currentMission.waila -- WAILA's
+    -- own loadMap() now also publishes g_currentMission.wailaTrailTracer,
+    -- so read it from there instead of the bare name.
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        print("[TaskMap] rebuildTrailHotspots: g_currentMission.wailaTrailTracer is nil (WAILA not loaded/too early?) - skipping")
+        return
+    end
+
+    local ingameMap = g_currentMission.hud ~= nil and g_currentMission.hud.ingameMap
+    if ingameMap == nil then
+        print("[TaskMap] rebuildTrailHotspots: g_currentMission.hud.ingameMap not available yet - skipping")
+        return
+    end
+
+    local centerX, centerZ = self:getScanCenter()
+    if centerX == nil then
+        print("[TaskMap] rebuildTrailHotspots: getScanCenter() returned nil (player/rootNode not available) - skipping")
+        return
+    end
+
+    for _, hotspot in ipairs(self.activeTrailHotspots) do
+        ingameMap:removeMapHotspot(hotspot)
+    end
+    self.activeTrailHotspots = {}
+
+    local result = wailaTrailTracer.scanRegion(centerX, centerZ)
+    print(string.format("[TaskMap] rebuildTrailHotspots: scan center=(%.1f,%.1f) -> %d path(s), %d area(s)",
+        centerX, centerZ, #result.paths, #result.areas))
+
+    -- Real hang found live: addDots (below, disabled for now) creates one
+    -- actual MapHotspot GUI object per point with zero cap -- a messy,
+    -- non-converging area trace can produce thousands of simplified
+    -- points (Douglas-Peucker has no hard output-size limit), and
+    -- thousands of synchronous addMapHotspot calls froze the game with
+    -- no error logged at all. Storing the raw result for cheap, transient
+    -- drawDebugLine visualization instead (see tickTrailDebugLines) --
+    -- verify the tracer's actual output is sane BEFORE trusting it to a
+    -- GUI system that can hang, not after.
+    self.lastTrailScanResult = result
+
+    -- local function addDots(pointLists, color)
+    --     for _, points in ipairs(pointLists) do
+    --         for _, point in ipairs(points) do
+    --             if TaskMap.MAX_TRAIL_DOTS <= #self.activeTrailHotspots then
+    --                 return
+    --             end
+    --             local hotspot = TrailPointHotspot.new()
+    --             hotspot:setColor3(color[1], color[2], color[3])
+    --             hotspot:setWorldPosition(point[1], point[2])
+    --             ingameMap:addMapHotspot(hotspot)
+    --             table.insert(self.activeTrailHotspots, hotspot)
+    --         end
+    --     end
+    -- end
+    --
+    -- addDots(result.paths, TaskMap.TRAIL_PATH_COLOR)
+    -- addDots(result.areas, TaskMap.TRAIL_AREA_COLOR)
+    --
+    -- print(string.format("[TaskMap] rebuildTrailHotspots: created %d trail dot hotspot(s) total", #self.activeTrailHotspots))
+end
+
+-- Cheap, transient, per-frame debug visualization -- drawDebugLine
+-- directly, same real, confirmed-working primitive WailaDeclaredArea's
+-- own drawDebug already uses, not a GUI object of any kind. Redrawn
+-- every frame on purpose: debug draw calls aren't persistent scene
+-- objects, they only last the frame they're issued in. Connects each
+-- path/area's own point sequence as a line strip instead of isolated
+-- dots -- shows the actual traced shape, not just scattered points.
+function TaskMap:tickTrailDebugLines()
+    local result = self.lastTrailScanResult
+    if result == nil then
+        return
+    end
+
+    local function drawLines(pointLists, r, g, b)
+        for _, points in ipairs(pointLists) do
+            for i = 1, #points - 1 do
+                local ax, az = points[i][1], points[i][2]
+                local bx, bz = points[i + 1][1], points[i + 1][2]
+                local ay = getTerrainHeightAtWorldPos(g_terrainNode, ax, 0, az) + 0.3
+                local by = getTerrainHeightAtWorldPos(g_terrainNode, bx, 0, bz) + 0.3
+                drawDebugLine(ax, ay, az, r, g, b, bx, by, bz, r, g, b, false)
+            end
+        end
+    end
+
+    drawLines(result.paths, TaskMap.TRAIL_PATH_COLOR[1], TaskMap.TRAIL_PATH_COLOR[2], TaskMap.TRAIL_PATH_COLOR[3])
+    drawLines(result.areas, TaskMap.TRAIL_AREA_COLOR[1], TaskMap.TRAIL_AREA_COLOR[2], TaskMap.TRAIL_AREA_COLOR[3])
+end
+
+function TaskMap:tickTrailScan(dt)
+    self.trailScanTimer = self.trailScanTimer + dt
+    if self.trailScanTimer >= TaskMap.TRAIL_SCAN_INTERVAL then
+        self.trailScanTimer = 0
+        self:rebuildTrailHotspots()
+    end
+end
+
 function TaskMap:deleteMap()
     g_messageCenter:unsubscribeAll(self)
 end
@@ -172,6 +338,8 @@ end
 function TaskMap:update(dt)
     self:trySubscribeToWailaEvents()
     self:tickRedraw(dt)
+    self:tickTrailScan(dt)
+    self:tickTrailDebugLines()
 end
 
 g_taskMap = TaskMap.new()

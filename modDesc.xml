@@ -30,6 +30,7 @@ change from the rename itself.
 
     <extraSourceFiles>
         <sourceFile filename="scripts/FieldJobHotspot.lua" />
+        <sourceFile filename="scripts/TrailPointHotspot.lua" />
         <sourceFile filename="scripts/TaskMap.lua" />
     </extraSourceFiles>
 </modDesc>
