@@ -55,6 +55,28 @@ TaskMap.REDRAW_INTERVAL = 3000
 -- so this only ever needs to re-run occasionally, not on the same
 -- cadence as the job labels.
 TaskMap.TRAIL_SCAN_INTERVAL = 15000
+-- Real request, testing-only for now: the automatic interval above kept
+-- re-running mid-investigation -- results changed out from under a
+-- screenshot taken between pressing print-screen and it actually
+-- capturing, making a "look at this weird shape" report impossible to
+-- pin down. true disables the automatic interval trigger entirely
+-- (tickTrailScan below still advances an in-progress scan every tick,
+-- just never STARTS a new one on its own) -- TASKMAP_TRAIL_SCAN_NOW
+-- (Left Shift+R) is then the only thing that starts one, so results stay
+-- stable until deliberately asked to change. Flip back to false once
+-- investigation settles down -- this isn't meant to be the permanent
+-- default, just a temporary testing mode.
+TaskMap.MANUAL_RESCAN_ONLY = true
+-- Real lag spike found live: a trail scan used to be one big synchronous
+-- call (blocking one frame for however long it took, even after WAILA's
+-- own sweep deadline bounded that worst case to 10s -- still one frame
+-- stalling for up to 10 seconds, not spread out). WailaTrailTracer now
+-- exposes an incremental scanner (newScanner/:update(budget), same real
+-- shape WailaFieldGridScanner already proves out) instead of the old
+-- one-shot scanRegion -- driven here every tick with a tiny budget
+-- instead of one big blocking call. Same proven value
+-- WailaFieldIndex.SCAN_BUDGET_SEC already uses for the identical reason.
+TaskMap.TRAIL_SCAN_BUDGET_SEC = 0.003
 -- Bold, maximally-distinct debug colors, not a polished final palette -
 -- this is drawDebugLine output meant to answer "is the sweep classifying
 -- path vs area correctly," not something meant to look good on a real
@@ -63,19 +85,22 @@ TaskMap.TRAIL_SCAN_INTERVAL = 15000
 -- terrain, so neither can be mistaken for the other or for scenery.
 TaskMap.TRAIL_PATH_COLOR = { 1, 1, 0 }
 TaskMap.TRAIL_AREA_COLOR = { 1, 0, 1 }
-
--- Real hang found live: addDots creates one actual MapHotspot GUI object
--- per point, no cap anywhere. WailaTrailTracer's own Douglas-Peucker
--- simplification has no hard output-size limit either -- a messy,
--- non-converging area trace (real, logged case: "unable to close
--- boundary loop, giving up at 15001 positions") isn't guaranteed to
--- simplify down to anything small, since a wildly irregular boundary can
--- have plenty of large, "significant" deviations the simplifier judges
--- worth keeping. Result: thousands of synchronous addMapHotspot calls in
--- one frame, game frozen with no error logged at all (silence after the
--- scan-summary print line was the only symptom). This cap is the actual
--- safety net, independent of whatever produces an oversized point list.
-TaskMap.MAX_TRAIL_DOTS = 500
+-- Real request: an "island" rejection (closed fine, just around the
+-- WRONG region -- WailaTrailScanner's own seed-containment check) and an
+-- "incomplete" rejection (never really closed at all -- hit a structure,
+-- stalled, or capped out) are different findings, not the same gray blur
+-- they used to be -- one topologically succeeded and got the wrong
+-- answer, the other just didn't finish. Orange for islands: distinct from
+-- accepted magenta and from the dim gray incomplete color below, and
+-- reads as "this closed, but on the wrong thing" at a glance.
+TaskMap.TRAIL_AREA_ISLAND_COLOR = { 1, 0.5, 0 }
+-- Dim gray, deliberately unlike every other color above -- still drawn
+-- for debugging (real, confirmed-live problem when a true boundary keeps
+-- failing to close/qualify: every nearby candidate tile independently
+-- re-attempts and re-fails it, and with no visual distinction from an
+-- accepted area that pile of near-misses just reads as an unreadable
+-- tangled mess), but never mistakable for a real accepted area.
+TaskMap.TRAIL_AREA_INCOMPLETE_COLOR = { 0.5, 0.5, 0.5 }
 
 -- Fixed color rather than the owning farm's color (tried first, matching
 -- FarmlandHotspot's own field-number text) -- farm colors are player-
@@ -94,7 +119,10 @@ function TaskMap.new()
     self.redrawTimer = 0
     self.subscribedToEvents = false
     self.trailScanTimer = 0
-    self.activeTrailHotspots = {}
+    -- nil when idle (between scans); a real WailaTrailScanner instance
+    -- (via newScanner, see TaskMap.TRAIL_SCAN_BUDGET_SEC's own comment)
+    -- while a scan is incrementally in progress.
+    self.trailScanner = nil
     return self
 end
 
@@ -189,17 +217,13 @@ function TaskMap:getScanCenter()
     return x, z
 end
 
--- Clears every currently-shown trail dot and redraws from a fresh
--- WailaTrailTracer.scanRegion result - same wipe-and-rebuild shape
--- rebuildAllHotspots already uses for job labels. One dot per already-
--- simplified path/area point (see WailaTrailTracer's own comment on why
--- dots, not connected rotated segments, for this first version).
--- TEMPORARY diagnostics throughout this function - "did we detect
--- anything at all" debug pass, matching WailaTrailTracer.scanRegion's
--- own new logging. Every early-return below now logs WHY, so a silent
--- "no dots ever appeared" report can actually be traced to a specific
--- cause instead of guessed at.
-function TaskMap:rebuildTrailHotspots()
+-- Starts a new incremental scan if none is currently running -- called
+-- once TRAIL_SCAN_INTERVAL has elapsed since the last one finished (see
+-- tickTrailScan). Every early-return here logs WHY, same reasoning the
+-- old synchronous version already established: a silent "no dots ever
+-- appeared" report needs to be traceable to a specific cause, not
+-- guessed at.
+function TaskMap:startTrailScan()
     -- Real bug found live: the bare WailaTrailTracer global is never nil
     -- because of timing -- it's PERMANENTLY invisible from this mod,
     -- because WAILA's own WailaTrailTracer.lua declares it as a bare
@@ -210,61 +234,45 @@ function TaskMap:rebuildTrailHotspots()
     -- so read it from there instead of the bare name.
     local wailaTrailTracer = g_currentMission.wailaTrailTracer
     if wailaTrailTracer == nil then
-        print("[TaskMap] rebuildTrailHotspots: g_currentMission.wailaTrailTracer is nil (WAILA not loaded/too early?) - skipping")
-        return
-    end
-
-    local ingameMap = g_currentMission.hud ~= nil and g_currentMission.hud.ingameMap
-    if ingameMap == nil then
-        print("[TaskMap] rebuildTrailHotspots: g_currentMission.hud.ingameMap not available yet - skipping")
+        print("[TaskMap] startTrailScan: g_currentMission.wailaTrailTracer is nil (WAILA not loaded/too early?) - skipping")
         return
     end
 
     local centerX, centerZ = self:getScanCenter()
     if centerX == nil then
-        print("[TaskMap] rebuildTrailHotspots: getScanCenter() returned nil (player/rootNode not available) - skipping")
+        print("[TaskMap] startTrailScan: getScanCenter() returned nil (player/rootNode not available) - skipping")
         return
     end
 
-    for _, hotspot in ipairs(self.activeTrailHotspots) do
-        ingameMap:removeMapHotspot(hotspot)
+    -- newScanner, not WailaTrailScanner.new directly -- WailaTrailScanner
+    -- itself is a bare global, invisible cross-mod for the identical
+    -- reason the bare WailaTrailTracer global was (see above); newScanner
+    -- is a thin factory on the already-published wailaTrailTracer table.
+    self.trailScanner = wailaTrailTracer.newScanner(centerX, centerZ)
+end
+
+-- Advances the in-progress scan (if any) by TRAIL_SCAN_BUDGET_SEC. Once
+-- it reports complete, swaps the result in for tickTrailDebugLines to
+-- draw and clears self.trailScanner back to idle.
+function TaskMap:advanceTrailScan()
+    if self.trailScanner == nil then
+        return
     end
-    self.activeTrailHotspots = {}
 
-    local result = wailaTrailTracer.scanRegion(centerX, centerZ)
-    print(string.format("[TaskMap] rebuildTrailHotspots: scan center=(%.1f,%.1f) -> %d path(s), %d area(s)",
-        centerX, centerZ, #result.paths, #result.areas))
-
-    -- Real hang found live: addDots (below, disabled for now) creates one
-    -- actual MapHotspot GUI object per point with zero cap -- a messy,
-    -- non-converging area trace can produce thousands of simplified
-    -- points (Douglas-Peucker has no hard output-size limit), and
-    -- thousands of synchronous addMapHotspot calls froze the game with
-    -- no error logged at all. Storing the raw result for cheap, transient
-    -- drawDebugLine visualization instead (see tickTrailDebugLines) --
-    -- verify the tracer's actual output is sane BEFORE trusting it to a
-    -- GUI system that can hang, not after.
-    self.lastTrailScanResult = result
-
-    -- local function addDots(pointLists, color)
-    --     for _, points in ipairs(pointLists) do
-    --         for _, point in ipairs(points) do
-    --             if TaskMap.MAX_TRAIL_DOTS <= #self.activeTrailHotspots then
-    --                 return
-    --             end
-    --             local hotspot = TrailPointHotspot.new()
-    --             hotspot:setColor3(color[1], color[2], color[3])
-    --             hotspot:setWorldPosition(point[1], point[2])
-    --             ingameMap:addMapHotspot(hotspot)
-    --             table.insert(self.activeTrailHotspots, hotspot)
-    --         end
-    --     end
-    -- end
-    --
-    -- addDots(result.paths, TaskMap.TRAIL_PATH_COLOR)
-    -- addDots(result.areas, TaskMap.TRAIL_AREA_COLOR)
-    --
-    -- print(string.format("[TaskMap] rebuildTrailHotspots: created %d trail dot hotspot(s) total", #self.activeTrailHotspots))
+    local isComplete = self.trailScanner:update(TaskMap.TRAIL_SCAN_BUDGET_SEC)
+    if isComplete then
+        -- Real hang found live (addDots, since removed as dead code):
+        -- creating one actual MapHotspot GUI object per point had no
+        -- cap, and a messy area trace could produce thousands of
+        -- simplified points -- thousands of synchronous addMapHotspot
+        -- calls froze the game with no error logged at all. Storing the
+        -- raw result for cheap, transient drawDebugLine visualization
+        -- instead (see tickTrailDebugLines) -- verify the tracer's
+        -- actual output is sane before trusting it to a GUI system that
+        -- can hang, not after.
+        self.lastTrailScanResult = self.trailScanner.result
+        self.trailScanner = nil
+    end
 end
 
 -- Cheap, transient, per-frame debug visualization -- drawDebugLine
@@ -280,11 +288,22 @@ function TaskMap:tickTrailDebugLines()
         return
     end
 
-    local function drawLines(pointLists, r, g, b)
+    -- Real bug this fixes: getSimplifiedPoints() deliberately returns an
+    -- OPEN ring (its own comment: "callers doing line-segment rendering
+    -- want that, not a Polygon2D") -- but this function only ever
+    -- connected consecutive pairs, never wrapping the last point back to
+    -- the first. Every "closed" area shape drawn all session has
+    -- actually had a small missing edge at the seam, confirmed live via
+    -- a visibly open gap in a traced shape. closed=true draws that final
+    -- wrap-around edge too -- only for actual closed shapes (areas), not
+    -- for paths/ribbons, which are genuinely open lines, not polygons.
+    local function drawLines(pointLists, r, g, b, closed)
         for _, points in ipairs(pointLists) do
-            for i = 1, #points - 1 do
+            local segmentCount = closed and #points or (#points - 1)
+            for i = 1, segmentCount do
+                local j = (i % #points) + 1
                 local ax, az = points[i][1], points[i][2]
-                local bx, bz = points[i + 1][1], points[i + 1][2]
+                local bx, bz = points[j][1], points[j][2]
                 local ay = getTerrainHeightAtWorldPos(g_terrainNode, ax, 0, az) + 0.3
                 local by = getTerrainHeightAtWorldPos(g_terrainNode, bx, 0, bz) + 0.3
                 drawDebugLine(ax, ay, az, r, g, b, bx, by, bz, r, g, b, false)
@@ -292,17 +311,226 @@ function TaskMap:tickTrailDebugLines()
         end
     end
 
-    drawLines(result.paths, TaskMap.TRAIL_PATH_COLOR[1], TaskMap.TRAIL_PATH_COLOR[2], TaskMap.TRAIL_PATH_COLOR[3])
-    drawLines(result.areas, TaskMap.TRAIL_AREA_COLOR[1], TaskMap.TRAIL_AREA_COLOR[2], TaskMap.TRAIL_AREA_COLOR[3])
+    -- Real request: a path is a centerline plus a real width, not just a
+    -- bare line -- draw the actual two-edge ribbon (result.pathEdges,
+    -- WailaTrailTracer.offsetChain's own output) instead of the raw
+    -- centerline (result.paths), so what's on screen matches what the
+    -- area wall-follower now actually treats as a path's real footprint.
+    -- `or {}` on the newer fields -- a hot-reload can leave an OLDER
+    -- result table (built before this deploy) sitting in
+    -- self.lastTrailScanResult until the next scan completes, and that
+    -- older shape won't have these keys -- ipairs(nil) would hard-error
+    -- every frame until then instead of just drawing nothing for a tick.
+    for _, edges in ipairs(result.pathEdges or {}) do
+        drawLines({ edges.left }, TaskMap.TRAIL_PATH_COLOR[1], TaskMap.TRAIL_PATH_COLOR[2], TaskMap.TRAIL_PATH_COLOR[3])
+        drawLines({ edges.right }, TaskMap.TRAIL_PATH_COLOR[1], TaskMap.TRAIL_PATH_COLOR[2], TaskMap.TRAIL_PATH_COLOR[3])
+    end
+    -- closed=true only for areas/rejectedIslands -- both genuinely
+    -- closedNaturally=true (an island rejection still closed, just
+    -- around the wrong thing). rejectedIncomplete (structure hit /
+    -- stall / position cap) never closed at all -- drawing a wrap-around
+    -- edge for those would falsely make an open, unfinished fragment
+    -- look like a real closed shape, exactly backwards from what that
+    -- color is supposed to communicate.
+    drawLines(result.areas or {}, TaskMap.TRAIL_AREA_COLOR[1], TaskMap.TRAIL_AREA_COLOR[2], TaskMap.TRAIL_AREA_COLOR[3], true)
+    drawLines(result.rejectedIslands or {}, TaskMap.TRAIL_AREA_ISLAND_COLOR[1], TaskMap.TRAIL_AREA_ISLAND_COLOR[2], TaskMap.TRAIL_AREA_ISLAND_COLOR[3], true)
+    drawLines(result.rejectedIncomplete or {}, TaskMap.TRAIL_AREA_INCOMPLETE_COLOR[1], TaskMap.TRAIL_AREA_INCOMPLETE_COLOR[2], TaskMap.TRAIL_AREA_INCOMPLETE_COLOR[3])
 end
 
+-- Advances any in-progress scan first, every tick, regardless of the
+-- interval timer below -- that's the whole point of the incremental
+-- redesign (see TRAIL_SCAN_BUDGET_SEC's own comment). Only considers
+-- starting a NEW scan once the current one (if any) has actually
+-- finished -- TRAIL_SCAN_INTERVAL governs how often a fresh scan starts,
+-- not how long one takes, and a scan can legitimately span many ticks
+-- depending on how much real work a busy area needs.
 function TaskMap:tickTrailScan(dt)
+    self:advanceTrailScan()
+
+    if self.trailScanner ~= nil then
+        return
+    end
+
+    -- See MANUAL_RESCAN_ONLY's own comment -- while true, only
+    -- onRescanTrailNow (the keybind) starts a new scan; the timer still
+    -- accumulates for free so flipping the flag back off later doesn't
+    -- need any other change here.
+    if TaskMap.MANUAL_RESCAN_ONLY then
+        return
+    end
+
     self.trailScanTimer = self.trailScanTimer + dt
     if self.trailScanTimer >= TaskMap.TRAIL_SCAN_INTERVAL then
         self.trailScanTimer = 0
-        self:rebuildTrailHotspots()
+        self:startTrailScan()
     end
 end
+
+-- Real request: the full window scan fires many independent seeds at
+-- once with no way to tell which rendered line came from which one --
+-- genuinely impossible to build a "does the algorithm do what I expect
+-- FROM THIS SPECIFIC SPOT" debug loop out of that, just an unreadable
+-- pile of lines ("graffiti"). This button now runs WailaTrailTracer's
+-- own debugTraceAt -- the SAME real classification/tracing code, but
+-- exactly once, seeded at exactly the player's current position, with no
+-- other seeds and no window/path state to confuse the result. Logs a
+-- clear, specific summary of what happened so the console output alone
+-- (not just the drawn line) answers "what did the algorithm actually do
+-- here."
+function TaskMap:onRescanTrailNow(actionName, inputValue, callbackState, isAnalog)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        print("[TaskMap] debug trace: g_currentMission.wailaTrailTracer is nil (WAILA not loaded/too early?)")
+        return
+    end
+
+    local x, z = self:getScanCenter()
+    if x == nil then
+        print("[TaskMap] debug trace: getScanCenter() returned nil (player/rootNode not available)")
+        return
+    end
+
+    local result = wailaTrailTracer.debugTraceAt(x, z)
+    self.lastDebugTrace = result
+
+    -- Real, explicit removal: WAILA's own debugTraceAt used to return a
+    -- list of region "shapes" -- gone, along with the whole region-
+    -- grouping concept. Real follow-up fix ("delete the lines between
+    -- any squares that meet"): per-CELL edge/interior classification is
+    -- gone too -- WailaTrailTracer now classifies per EDGE, emitting
+    -- only the sides of a filled cell that border an unfilled neighbor.
+    -- result.segments is that flat list of 2-point border segments.
+    print(string.format("[TaskMap] debug trace at (%.1f, %.1f): %d cell(s), %d border segment(s), %d polygon(s), touchesTileEdge=%s%s",
+        x, z, result.cellCount, #result.segments, #(result.polygons or {}), tostring(result.touchesTileEdge),
+        result.truncated and string.format(" (TRUNCATED -- over the %d segment cap, WailaTrailTracer.DEBUG_MAX_CELL_BOXES)", wailaTrailTracer.DEBUG_MAX_CELL_BOXES) or ""))
+
+    -- Real request ("absolutely" -- switch to one DensityMapModifier
+    -- polygon fill per region instead of one write per cell, confirmed
+    -- real against FieldManager.lua's own clearPolygonPoints/
+    -- addPolygonPointWorldCoords usage). See
+    -- WailaTrailTracer.testDensityMapWrite's own header.
+    if result.densityWriteMs ~= nil then
+        print(string.format("[TaskMap]   density map write test: %d polygon(s) written in %.2fms",
+            result.densityWritePolygonCount, result.densityWriteMs))
+    end
+end
+
+-- Real, explicit fix, confirmed live: this used to call a single
+-- blocking scanWholeMapOverlay() covering all 256 tiles in one call --
+-- "either too slow or game got killed." Real project rule this broke:
+-- every scan needs a real per-tick budget (see this session's own
+-- feedback_waila_performance_is_non_negotiable memory). Now just starts
+-- WailaTrailTracer's own incremental state machine -- see its
+-- startWholeMapScan/tickWholeMapScan headers -- and TaskMap:update(dt)
+-- below drives it one tile per frame until done. Still its own separate
+-- keybind (TASKMAP_TRAIL_SCAN_WHOLE_MAP), not folded into
+-- onRescanTrailNow, so it can never fire by accident.
+function TaskMap:onRescanWholeMap(actionName, inputValue, callbackState, isAnalog)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        print("[TaskMap] whole-map scan: g_currentMission.wailaTrailTracer is nil (WAILA not loaded/too early?)")
+        return
+    end
+
+    wailaTrailTracer.startWholeMapScan()
+end
+
+-- Renders self.lastDebugTrace (onRescanTrailNow's own result). No region
+-- grouping -- just the tile-boundary marker, the raw border segments
+-- (WailaTrailTracer's collectBorderSegments), and the smoothed closed
+-- polygons (chainBorderLoops + smoothClosedLoop) drawn on top of them.
+TaskMap.DEBUG_TRACE_RADIUS_COLOR = { 0.2, 1, 0.2 }
+TaskMap.DEBUG_TRACE_EDGE_COLOR = { 1, 1, 0 }
+-- "Step 2": result.polygons, the real deliverable -- an actually-closed
+-- polygon per connected region, drawn ON TOP of the border segments
+-- rather than replacing them -- real request ("leave these in place
+-- until we have that sorted") so the two can be compared directly. Same
+-- pink used in the reference screenshot for this exact idea.
+TaskMap.DEBUG_TRACE_POLYGON_COLOR = { 1, 0.4, 0.7 }
+
+function TaskMap:tickDebugTraceLine()
+    local result = self.lastDebugTrace
+    if result == nil then
+        return
+    end
+
+    local function drawSegment(points, color, closed)
+        local segmentCount = closed and #points or (#points - 1)
+        for i = 1, segmentCount do
+            local j = (i % #points) + 1
+            local ax, az = points[i][1], points[i][2]
+            local bx, bz = points[j][1], points[j][2]
+            local ay = getTerrainHeightAtWorldPos(g_terrainNode, ax, 0, az) + 0.3
+            local by = getTerrainHeightAtWorldPos(g_terrainNode, bx, 0, bz) + 0.3
+            drawDebugLine(ax, ay, az, color[1], color[2], color[3], bx, by, bz, color[1], color[2], color[3], false)
+        end
+    end
+
+    -- Real bug this fixes: the debug tool's own grid rasterization
+    -- (WailaTrailTracer.rasterizeRegion) has always bounded itself with
+    -- a SQUARE (centerX/Z +/- radius on each axis), never a circle --
+    -- the old drawn circle never matched what the algorithm was really
+    -- bounded by (a radius-60 square's own corners reach ~85m out, well
+    -- past a 60-radius circle). result.debugBounds is the honest square,
+    -- a closed 5-point ring (first point repeated at the end) -- drawn
+    -- open (no extra wrap segment needed, it's already closed).
+    if result.debugBounds ~= nil then
+        drawSegment(result.debugBounds, TaskMap.DEBUG_TRACE_RADIUS_COLOR)
+    end
+
+    -- Each segment is just its own 2-point {a, b} -- drawSegment on a
+    -- 2-point list with closed=false (the default) draws exactly that
+    -- one line, no extra helper needed.
+    for _, segment in ipairs(result.segments or {}) do
+        drawSegment(segment, TaskMap.DEBUG_TRACE_EDGE_COLOR)
+    end
+
+    -- "Step 2" -- each polygon IS a real closed ring (chainBorderLoops
+    -- only ever returns closed loops), so closed=true here.
+    for _, polygon in ipairs(result.polygons or {}) do
+        drawSegment(polygon, TaskMap.DEBUG_TRACE_POLYGON_COLOR, true)
+    end
+end
+
+-- Real, confirmed pattern -- mirrors FS25WhatAmILookingAt's own
+-- registerActionEvents/PlayerInputComponent hook exactly (see that mod's
+-- own comment on why category="ONFOOT" isn't used and this global hook is
+-- the real, working alternative).
+function TaskMap:registerActionEvents()
+    local _, rescanId = g_inputBinding:registerActionEvent(
+        InputAction.TASKMAP_TRAIL_SCAN_NOW,
+        self,
+        self.onRescanTrailNow,
+        false, true, false, true, nil, true
+    )
+    if rescanId ~= nil then
+        g_inputBinding:setActionEventTextPriority(rescanId, GS_PRIO_LOW)
+        g_inputBinding:setActionEventTextVisibility(rescanId, true)
+    end
+
+    local _, wholeMapId = g_inputBinding:registerActionEvent(
+        InputAction.TASKMAP_TRAIL_SCAN_WHOLE_MAP,
+        self,
+        self.onRescanWholeMap,
+        false, true, false, true, nil, true
+    )
+    if wholeMapId ~= nil then
+        g_inputBinding:setActionEventTextPriority(wholeMapId, GS_PRIO_LOW)
+        g_inputBinding:setActionEventTextVisibility(wholeMapId, true)
+    end
+end
+
+PlayerInputComponent.registerGlobalPlayerActionEvents = Utils.appendedFunction(
+    PlayerInputComponent.registerGlobalPlayerActionEvents,
+    function()
+        -- g_taskMap, NOT the bare TaskMap class table -- g_taskMap (see
+        -- its own `= TaskMap.new()` below) is the actual instance holding
+        -- trailScanner/trailScanTimer; registering the bare class table
+        -- as the action-event target would read/write those fields on
+        -- the wrong table entirely.
+        g_taskMap:registerActionEvents()
+    end
+)
 
 function TaskMap:deleteMap()
     g_messageCenter:unsubscribeAll(self)
@@ -340,7 +568,101 @@ function TaskMap:update(dt)
     self:tickRedraw(dt)
     self:tickTrailScan(dt)
     self:tickTrailDebugLines()
+    self:tickDebugTraceLine()
+    self:tickWholeMapScan()
 end
+
+-- Drives WailaTrailTracer's own incremental whole-map scan state
+-- machine, one tile per frame -- see onRescanWholeMap's own comment for
+-- why this exists (a single 256-tile blocking call froze/killed the
+-- game). tickWholeMapScan() itself returns true (a safe, cheap no-op)
+-- whenever no scan is actually running, so this can be called
+-- unconditionally every frame without its own guard.
+function TaskMap:tickWholeMapScan()
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        return
+    end
+    wailaTrailTracer.tickWholeMapScan()
+end
+
+-- Real request ("would be nice to have a progress bar somewhere") --
+-- plain on-screen text, not tied to IngameMap/drawFields at all (this
+-- doesn't need to be positioned relative to the map, just visible).
+-- Reads WailaTrailTracer.wholeMapScanState directly -- a plain field,
+-- same cross-mod-safe access every other wailaTrailTracer.* read in
+-- this file already uses. Only drawn while a scan is actually running.
+function TaskMap:draw()
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        return
+    end
+    local state = wailaTrailTracer.wholeMapScanState
+    if state == nil then
+        return
+    end
+
+    local total = state.chunksPerSide * state.chunksPerSide
+    local done = state.row * state.chunksPerSide + state.col
+    local percent = total > 0 and (done / total * 100) or 0
+
+    -- Real bug this fixes, confirmed live: (0.02, 0.9) sat right on top
+    -- of the game's own keybind hint list (top-left), unreadable. Moved
+    -- to the top-right corner, right-aligned, away from both that list
+    -- and the minimap (bottom corners).
+    setTextColor(1, 1, 1, 1)
+    setTextAlignment(RenderText.ALIGN_RIGHT)
+    renderText(0.98, 0.95, 0.02, string.format("WAILA whole-map scan: %d / %d chunks (%.0f%%)", done, total, percent))
+end
+
+-- Real, explicit removal: the fixed-screen-rect version ("does the baked
+-- overlay show up as real pixels at all") is gone -- confirmed live, an
+-- independent draw() hook guessing at both position AND draw timing
+-- visibly broke things (the minimap's own content stopped rendering,
+-- shapes floated in what looked like world space). Real request ("go
+-- steal what the map is doing with fields"): hook directly into
+-- IngameMap:drawFields itself via Utils.appendedFunction -- the same
+-- base-game-method-patching pattern this whole mod family already uses
+-- (PlayerInputComponent.registerGlobalPlayerActionEvents above,
+-- FS25WhatAmILookingAt.lua's StoreManager/SavegameController hooks) --
+-- so our overlay draws at the exact same point in the exact same
+-- sequence the real fields overlay does, with the exact same position
+-- math (self.layout:getMapSize/getMapPosition/getMapPivot/
+-- getMapRotation, self.mapExtensionOffsetX/Z,
+-- self.mapExtensionScaleFactor -- confirmed live against
+-- IngameMap:drawFields' own body). No independent per-frame hook of our
+-- own needed at all -- IngameMap calls its own drawFields every frame
+-- already, and appendedFunction rides along with that.
+local function drawWailaTrailOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.testOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.testOverlay) then
+        return
+    end
+
+    local overlay = wailaTrailTracer.testOverlay
+    local width, height = self.layout:getMapSize()
+    local x, y = self.layout:getMapPosition()
+    local px, py = self.layout:getMapPivot()
+    px = px + x
+    py = py + y
+    x = x + width * self.mapExtensionOffsetX
+    y = y + height * self.mapExtensionOffsetZ
+    px = px - x
+    py = py - y
+    local posX = x
+    local posY = y
+    local sizeX = width * self.mapExtensionScaleFactor
+    local sizeY = height * self.mapExtensionScaleFactor
+
+    setOverlayRotation(overlay, self.layout:getMapRotation(), px, py)
+    setOverlayColor(overlay, 1, 1, 1, 1)
+    renderOverlay(overlay, posX, posY, sizeX, sizeY)
+end
+
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
 
 g_taskMap = TaskMap.new()
 addModEventListener(g_taskMap)
