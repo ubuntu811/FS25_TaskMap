@@ -570,6 +570,7 @@ function TaskMap:update(dt)
     self:tickTrailDebugLines()
     self:tickDebugTraceLine()
     self:tickWholeMapScan()
+    self:tryPatchAfterMinimapPlus()
 end
 
 -- Drives WailaTrailTracer's own incremental whole-map scan state
@@ -597,22 +598,59 @@ function TaskMap:draw()
     if wailaTrailTracer == nil then
         return
     end
+
     local state = wailaTrailTracer.wholeMapScanState
-    if state == nil then
+    if state ~= nil then
+        local total = state.chunksPerSide * state.chunksPerSide
+        local done = state.row * state.chunksPerSide + state.col
+        local percent = total > 0 and (done / total * 100) or 0
+
+        -- Real bug this fixes, confirmed live: (0.02, 0.9) sat right on
+        -- top of the game's own keybind hint list (top-left), unreadable.
+        -- Moved to the top-right corner, right-aligned, away from both
+        -- that list and the minimap (bottom corners).
+        setTextColor(1, 1, 1, 1)
+        setTextAlignment(RenderText.ALIGN_RIGHT)
+        renderText(0.98, 0.88, 0.02, string.format("WAILA whole-map scan: %d / %d chunks (%.0f%%)", done, total, percent))
+    end
+
+    self:drawTrailPersistenceProgress()
+end
+
+-- Real request ("~2m10s human loses patience... suppose we'd need
+-- another progress bar"): a restore this size (confirmed live, 133s for
+-- 42,631 polygons) has no visible sign of life otherwise -- the only
+-- existing feedback was tickLoadFromXML's own log-only progress line,
+-- invisible unless you're watching log.txt. Same bar shape/position
+-- convention as the scan progress bar above, just one line lower so
+-- both could show at once without overlapping (unlikely in practice,
+-- but harmless to allow). Save gets the same treatment for the same
+-- reason, even though nobody's complained about it specifically yet --
+-- it's the same class of "long tick-budgeted operation with zero visual
+-- feedback" problem, just currently faster (was 24-29s for these
+-- polygon counts) so less likely to be noticed.
+function TaskMap:drawTrailPersistenceProgress()
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
         return
     end
 
-    local total = state.chunksPerSide * state.chunksPerSide
-    local done = state.row * state.chunksPerSide + state.col
-    local percent = total > 0 and (done / total * 100) or 0
-
-    -- Real bug this fixes, confirmed live: (0.02, 0.9) sat right on top
-    -- of the game's own keybind hint list (top-left), unreadable. Moved
-    -- to the top-right corner, right-aligned, away from both that list
-    -- and the minimap (bottom corners).
     setTextColor(1, 1, 1, 1)
     setTextAlignment(RenderText.ALIGN_RIGHT)
-    renderText(0.98, 0.95, 0.02, string.format("WAILA whole-map scan: %d / %d chunks (%.0f%%)", done, total, percent))
+
+    local loadState = wailaTrailTracer.loadState
+    if loadState ~= nil then
+        local total = #loadState.workItems
+        local percent = total > 0 and (loadState.index / total * 100) or 0
+        renderText(0.98, 0.85, 0.02, string.format("WAILA trail restore: %d / %d polygons (%.0f%%)", loadState.index, total, percent))
+    end
+
+    local saveState = wailaTrailTracer.saveState
+    if saveState ~= nil then
+        local total = #saveState.workItems
+        local percent = total > 0 and (saveState.index / total * 100) or 0
+        renderText(0.98, 0.82, 0.02, string.format("WAILA trail save: %d / %d polygons (%.0f%%)", saveState.index, total, percent))
+    end
 end
 
 -- Real, explicit removal: the fixed-screen-rect version ("does the baked
@@ -633,16 +671,48 @@ end
 -- IngameMap:drawFields' own body). No independent per-frame hook of our
 -- own needed at all -- IngameMap calls its own drawFields every frame
 -- already, and appendedFunction rides along with that.
-local function drawWailaTrailOverlay(self)
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil or wailaTrailTracer.testOverlay == nil then
-        return
+-- Real request ("still nothing" after the minimap clip fix): rather than
+-- guess again, log WHICH branch is actually bailing, once per distinct
+-- state (not every frame) so a single log capture shows exactly what's
+-- happening instead of another blind fix attempt. See
+-- feedback_trust_live_evidence_over_code_reading.
+-- Real, confirmed live gap: pure state-based dedup only logs the FIRST
+-- time a given state occurs -- if the corner minimap rendered with its
+-- own small size even ONCE early on, then never changed again, it would
+-- log exactly once and then go silent forever, indistinguishable from
+-- "never happened at all" in a log excerpt taken later. Confirmed this
+-- was actually hiding evidence: every single "rendering" line captured
+-- all session was the same fullscreen-scale size -- zero minimap-scale
+-- renders ever logged -- but dedup alone can't tell us whether that's
+-- because the minimap genuinely never renders, or because its one-time
+-- log line is buried earlier than any excerpt looked at. Added a time
+-- heartbeat alongside the state dedup: logs on a state CHANGE same as
+-- before, but also unconditionally every OVERLAY_LOG_HEARTBEAT_SEC
+-- regardless of whether the state repeats -- so "steady, unchanging,
+-- still happening" and "never happening" are finally distinguishable in
+-- a short log excerpt.
+local loggedOverlayStates = {}
+local lastOverlayLogTime = {}
+local OVERLAY_LOG_HEARTBEAT_SEC = 2.0
+local function logOverlayStateOnce(logKey, state, ...)
+    local now = getTimeSec()
+    local stateChanged = loggedOverlayStates[logKey] ~= state
+    local heartbeatDue = lastOverlayLogTime[logKey] == nil or now - lastOverlayLogTime[logKey] >= OVERLAY_LOG_HEARTBEAT_SEC
+    if stateChanged or heartbeatDue then
+        loggedOverlayStates[logKey] = state
+        lastOverlayLogTime[logKey] = now
+        print(string.format(...))
     end
-    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.testOverlay) then
-        return
-    end
+end
 
-    local overlay = wailaTrailTracer.testOverlay
+-- Shared render path for any density-map-visualization overlay drawn
+-- onto IngameMap -- factored out once a SECOND overlay (the real-road-
+-- spline proof, see WailaTrailTracer.buildRoadSplineOverlay) needed the
+-- exact same position/clip math as the trail overlay already had, so the
+-- two copies wouldn't drift apart from each other over time. logKey
+-- keeps each overlay's diagnostic dedup state independent (loggedOverlayStates
+-- is shared storage, keyed per overlay, not per literal state string).
+local function renderMapOverlay(self, overlay, logKey, logLabel)
     local width, height = self.layout:getMapSize()
     local x, y = self.layout:getMapPosition()
     local px, py = self.layout:getMapPivot()
@@ -657,12 +727,220 @@ local function drawWailaTrailOverlay(self)
     local sizeX = width * self.mapExtensionScaleFactor
     local sizeY = height * self.mapExtensionScaleFactor
 
+    logOverlayStateOnce(
+        logKey,
+        string.format("rendering_%.3f_%.3f_%.3f_%.3f_%.3f_%.3f_%s", width, height, posX, posY, sizeX, sizeY, tostring(self.clipX1)),
+        "[TaskMap] %s: overlay ready, rendering (width=%.3f height=%.3f posX=%.3f posY=%.3f sizeX=%.3f sizeY=%.3f clipX1=%s)",
+        logLabel, width, height, posX, posY, sizeX, sizeY, tostring(self.clipX1))
+
+    -- Real, confirmed bug: the corner minimap (IngameMapLayoutCircle) sets
+    -- self.clipX1/Y1/X2/Y2 to crop the fields overlay into its round
+    -- shape -- drawFields' own body (confirmed via decompile) recomputes
+    -- posX/posY/sizeX/sizeY AND the overlay's UVs for that clip via
+    -- Overlay.getClippingUVs. This copy never replicated that branch, so
+    -- it always drew with the un-clipped fullscreen-map math -- harmless
+    -- on the fullscreen layout (clipX1 is nil there) but wrong position/
+    -- size on the minimap, which is why nothing visible showed up there.
+    if self.clipX1 ~= nil then
+        local u1, v1, u2, v2, u3, v3, u4, v4
+        posX, posY, sizeX, sizeY, u1, v1, u2, v2, u3, v3, u4, v4 = Overlay.getClippingUVs(Overlay.DEFAULT_UVS, posX, posY, sizeX, sizeY, self.clipX1, self.clipY1, self.clipX2, self.clipY2)
+        if u1 == nil then
+            return
+        end
+        setOverlayUVs(overlay, u1, v1, u2, v2, u3, v3, u4, v4)
+    end
+
     setOverlayRotation(overlay, self.layout:getMapRotation(), px, py)
     setOverlayColor(overlay, 1, 1, 1, 1)
     renderOverlay(overlay, posX, posY, sizeX, sizeY)
+    if self.clipX1 ~= nil then
+        setOverlayUVs(overlay, unpack(Overlay.DEFAULT_UVS))
+    end
 end
 
+local function drawWailaTrailOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        logOverlayStateOnce("trail", "noTracer", "[TaskMap] drawWailaTrailOverlay: g_currentMission.wailaTrailTracer is nil")
+        return
+    end
+    if wailaTrailTracer.testOverlay == nil then
+        logOverlayStateOnce("trail", "noOverlay", "[TaskMap] drawWailaTrailOverlay: wailaTrailTracer.testOverlay is nil (no scan has run yet this session)")
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.testOverlay) then
+        logOverlayStateOnce("trail", "notReady", "[TaskMap] drawWailaTrailOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay")
+end
+
+-- Real request ("prove to me you can write splines to the minimap"):
+-- separate draw hook for the real-road-spline overlay
+-- (WailaTrailTracer.buildRoadSplineOverlay) -- deliberately its OWN
+-- independent hook, not folded into drawWailaTrailOverlay, so it can
+-- succeed or fail independently and stay cleanly separable for the
+-- planned "dedup discovered trails vs declared roads" step.
+local function drawWailaRoadOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        logOverlayStateOnce("road", "noTracer", "[TaskMap] drawWailaRoadOverlay: g_currentMission.wailaTrailTracer is nil")
+        return
+    end
+    if wailaTrailTracer.roadOverlay == nil then
+        logOverlayStateOnce("road", "noOverlay", "[TaskMap] drawWailaRoadOverlay: wailaTrailTracer.roadOverlay is nil (run 'Build road overlay' from the debug hub first)")
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.roadOverlay) then
+        logOverlayStateOnce("road", "notReady", "[TaskMap] drawWailaRoadOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.roadOverlay, "road", "drawWailaRoadOverlay")
+end
+
+-- Real request ("go ahead, make sure both are drawn in distinct
+-- colors"): third independent overlay for WailaTrailTracer.buildFeatureOverlay
+-- (tree/water, via real CollisionFlag.TREE/WATER raycasts) -- same
+-- independent-hook reasoning as drawWailaRoadOverlay above.
+local function drawWailaFeatureOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        logOverlayStateOnce("feature", "noTracer", "[TaskMap] drawWailaFeatureOverlay: g_currentMission.wailaTrailTracer is nil")
+        return
+    end
+    if wailaTrailTracer.featureOverlay == nil then
+        logOverlayStateOnce("feature", "noOverlay", "[TaskMap] drawWailaFeatureOverlay: wailaTrailTracer.featureOverlay is nil (run 'Build tree/water overlay' from the debug hub first)")
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.featureOverlay) then
+        logOverlayStateOnce("feature", "notReady", "[TaskMap] drawWailaFeatureOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.featureOverlay, "feature", "drawWailaFeatureOverlay")
+end
+
+-- Real request ("just a simple diagonal line... prove we're not chasing
+-- a complexity problem in the minimap"): fourth, deliberately trivial
+-- overlay for WailaTrailTracer.buildDiagonalTestOverlay -- same
+-- independent-hook pattern as the other three, but the SIMPLEST possible
+-- data (one polygon, no scanning/sampling of any kind) -- isolates
+-- "does our render pipeline reach the minimap at all" from "is something
+-- wrong with our data."
+local function drawWailaDiagonalTestOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        logOverlayStateOnce("diagonal", "noTracer", "[TaskMap] drawWailaDiagonalTestOverlay: g_currentMission.wailaTrailTracer is nil")
+        return
+    end
+    if wailaTrailTracer.diagonalOverlay == nil then
+        logOverlayStateOnce("diagonal", "noOverlay", "[TaskMap] drawWailaDiagonalTestOverlay: wailaTrailTracer.diagonalOverlay is nil (run 'Build diagonal test overlay' from the debug hub first)")
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.diagonalOverlay) then
+        logOverlayStateOnce("diagonal", "notReady", "[TaskMap] drawWailaDiagonalTestOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.diagonalOverlay, "diagonal", "drawWailaDiagonalTestOverlay")
+end
+
+-- Real request ("classify space first... go ahead with the forests"):
+-- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
+-- diversity classifier prototype, same independent-hook pattern as the
+-- other four.
+local function drawWailaForestOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil then
+        logOverlayStateOnce("forest", "noTracer", "[TaskMap] drawWailaForestOverlay: g_currentMission.wailaTrailTracer is nil")
+        return
+    end
+    if wailaTrailTracer.forestOverlay == nil then
+        logOverlayStateOnce("forest", "noOverlay", "[TaskMap] drawWailaForestOverlay: wailaTrailTracer.forestOverlay is nil (run 'Build forest overlay' from the debug hub first)")
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.forestOverlay) then
+        logOverlayStateOnce("forest", "notReady", "[TaskMap] drawWailaForestOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.forestOverlay, "forest", "drawWailaForestOverlay")
+end
+
+-- Real request ("draw the forest patches underneath, so roads going
+-- through forest patches are visible"): draw order here IS layering
+-- order (painter's algorithm -- each appended function draws on top of
+-- everything before it). Forest goes first (bottom layer) specifically
+-- so real roads -- drawn after -- stay visible cutting through a forest
+-- patch instead of being covered by it.
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaForestOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaDiagonalTestOverlay)
+
+-- Real, confirmed live find (2026-09-30, user + investigation of
+-- FS25_minimapPlus's own source): the reason nothing ever showed on the
+-- corner minimap all session, even the simplest possible test polygon,
+-- is a genuine third-party mod conflict, not a bug in any of the above.
+-- MMapPlus patches drawFields on the INSTANCE
+-- (g_currentMission.hud.ingameMap.drawFields = Utils.overwrittenFunction(...)),
+-- not the class table the four appends above target -- Lua instance
+-- fields shadow class/metatable fields, so once minimapPlus's patch
+-- runs, EVERY call to that one shared ingameMap's :drawFields() resolves
+-- to ITS wrapper first, not ours. That wrapper only calls its own
+-- captured oldFunc (which, by load order, already includes our whole
+-- class-level chain above) for the FULLSCREEN layout; for any minimap
+-- layout (Circle/Square/SquareLarge) it builds its own hardcoded 2-
+-- overlay list and returns WITHOUT ever calling oldFunc -- our entire
+-- chain silently skipped, every time, for every minimap shape, no matter
+-- how simple the test data was.
+--
+-- Real fix: append AFTER minimapPlus's own instance-level patch, on the
+-- SAME instance field -- Utils.appendedFunction always runs BOTH halves
+-- unconditionally, regardless of what the first half's own internal
+-- branching decided, so this fires for every layout, completely
+-- independent of minimapPlus's logic (harmless if it also draws via the
+-- fullscreen path's oldFunc -- same overlay drawn twice on the same
+-- frame is a no-op visually, not a correctness bug).
+--
+-- Real, confirmed live bug in the FIRST version of this fix: it detected
+-- "minimapPlus has patched" via MMapPlus.isIngameMapPatched -- a global
+-- MMapPlus declares in ITS OWN mod. Confirmed live (empty log, the
+-- success message never printed) that this is the exact same class of
+-- bug this project's own fs25_cross_mod_globals memory already
+-- documents: a mod's own declared globals are invisible from a DIFFERENT
+-- mod's Lua sandbox, so MMapPlus read as nil from TaskMap regardless of
+-- whether minimapPlus was actually loaded. Real fix: stop depending on
+-- any mod-specific global at all. g_currentMission.hud.ingameMap is a
+-- real, shared, base-game object (visible everywhere, unlike MMapPlus),
+-- so watch ITS OWN drawFields field directly via rawget (true instance-
+-- level presence, ignoring class/metatable inheritance) -- self-heals
+-- against load order automatically: every time something ELSE re-patches
+-- the instance (minimapPlus or, in principle, any other mod), the value
+-- changes, and we re-append on top of whatever's there now, keeping our
+-- draws last in the chain no matter when everyone else's patches land.
+local hasPatchedInstanceOnce = false
+local lastKnownInstanceDrawFields = nil
+function TaskMap:tryPatchAfterMinimapPlus()
+    if g_currentMission == nil or g_currentMission.hud == nil or g_currentMission.hud.ingameMap == nil then
+        return
+    end
+
+    local ingameMap = g_currentMission.hud.ingameMap
+    local current = rawget(ingameMap, "drawFields")
+    if hasPatchedInstanceOnce and current == lastKnownInstanceDrawFields then
+        return
+    end
+
+    ingameMap.drawFields = Utils.appendedFunction(ingameMap.drawFields, function(self)
+        drawWailaForestOverlay(self)
+        drawWailaTrailOverlay(self)
+        drawWailaRoadOverlay(self)
+        drawWailaFeatureOverlay(self)
+        drawWailaDiagonalTestOverlay(self)
+    end)
+    hasPatchedInstanceOnce = true
+    lastKnownInstanceDrawFields = rawget(ingameMap, "drawFields")
+    print("[TaskMap] (re-)patched ingameMap's instance-level drawFields -- keeps our overlays last in the chain regardless of what other mods (e.g. minimapPlus) do to it")
+end
 
 g_taskMap = TaskMap.new()
 addModEventListener(g_taskMap)
