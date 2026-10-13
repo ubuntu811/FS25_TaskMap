@@ -826,30 +826,6 @@ local function drawWailaFeatureOverlay(self)
     renderMapOverlay(self, wailaTrailTracer.featureOverlay, "feature", "drawWailaFeatureOverlay")
 end
 
--- Real request ("just a simple diagonal line... prove we're not chasing
--- a complexity problem in the minimap"): fourth, deliberately trivial
--- overlay for WailaTrailTracer.buildDiagonalTestOverlay -- same
--- independent-hook pattern as the other three, but the SIMPLEST possible
--- data (one polygon, no scanning/sampling of any kind) -- isolates
--- "does our render pipeline reach the minimap at all" from "is something
--- wrong with our data."
-local function drawWailaDiagonalTestOverlay(self)
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil then
-        logOverlayStateOnce("diagonal", "noTracer", "[TaskMap] drawWailaDiagonalTestOverlay: g_currentMission.wailaTrailTracer is nil")
-        return
-    end
-    if wailaTrailTracer.diagonalOverlay == nil then
-        logOverlayStateOnce("diagonal", "noOverlay", "[TaskMap] drawWailaDiagonalTestOverlay: wailaTrailTracer.diagonalOverlay is nil (run 'Build diagonal test overlay' from the debug hub first)")
-        return
-    end
-    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.diagonalOverlay) then
-        logOverlayStateOnce("diagonal", "notReady", "[TaskMap] drawWailaDiagonalTestOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
-        return
-    end
-    renderMapOverlay(self, wailaTrailTracer.diagonalOverlay, "diagonal", "drawWailaDiagonalTestOverlay")
-end
-
 -- Real request ("classify space first... go ahead with the forests"):
 -- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
 -- diversity classifier prototype, same independent-hook pattern as the
@@ -905,7 +881,6 @@ IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTra
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
-IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaDiagonalTestOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaLayerClassOverlay)
 
 -- Real, confirmed live find (2026-09-30, user + investigation of
@@ -968,7 +943,6 @@ function TaskMap:tryPatchAfterMinimapPlus()
         drawWailaRoadOverlay(self)
         drawWailaRoadLayerOverlay(self)
         drawWailaFeatureOverlay(self)
-        drawWailaDiagonalTestOverlay(self)
         drawWailaLayerClassOverlay(self)
     end)
     hasPatchedInstanceOnce = true
