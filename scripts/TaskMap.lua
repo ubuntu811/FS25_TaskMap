@@ -693,7 +693,7 @@ end
 -- a short log excerpt.
 local loggedOverlayStates = {}
 local lastOverlayLogTime = {}
-local OVERLAY_LOG_HEARTBEAT_SEC = 2.0
+local OVERLAY_LOG_HEARTBEAT_SEC = 300.0
 local function logOverlayStateOnce(logKey, state, ...)
     local now = getTimeSec()
     local stateChanged = loggedOverlayStates[logKey] ~= state
@@ -705,6 +705,13 @@ local function logOverlayStateOnce(logKey, state, ...)
     end
 end
 
+-- Real idea ("the base map already has its gray roads/paths ... if we
+-- could grab those"): we can't lift the road layer out of the map's
+-- single background image, but we don't have to -- draw the forest
+-- semi-transparent and the base map's own roads/paths show through it.
+-- 1.0 = opaque (old look).
+TaskMap.FOREST_OVERLAY_ALPHA = 0.1
+
 -- Shared render path for any density-map-visualization overlay drawn
 -- onto IngameMap -- factored out once a SECOND overlay (the real-road-
 -- spline proof, see WailaTrailTracer.buildRoadSplineOverlay) needed the
@@ -712,7 +719,7 @@ end
 -- two copies wouldn't drift apart from each other over time. logKey
 -- keeps each overlay's diagnostic dedup state independent (loggedOverlayStates
 -- is shared storage, keyed per overlay, not per literal state string).
-local function renderMapOverlay(self, overlay, logKey, logLabel)
+local function renderMapOverlay(self, overlay, logKey, logLabel, alpha)
     local width, height = self.layout:getMapSize()
     local x, y = self.layout:getMapPosition()
     local px, py = self.layout:getMapPivot()
@@ -751,7 +758,7 @@ local function renderMapOverlay(self, overlay, logKey, logLabel)
     end
 
     setOverlayRotation(overlay, self.layout:getMapRotation(), px, py)
-    setOverlayColor(overlay, 1, 1, 1, 1)
+    setOverlayColor(overlay, 1, 1, 1, alpha or 1)
     renderOverlay(overlay, posX, posY, sizeX, sizeY)
     if self.clipX1 ~= nil then
         setOverlayUVs(overlay, unpack(Overlay.DEFAULT_UVS))
@@ -847,6 +854,28 @@ end
 -- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
 -- diversity classifier prototype, same independent-hook pattern as the
 -- other four.
+local function drawWailaRoadLayerOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.roadLayerOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.roadLayerOverlay) then
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.roadLayerOverlay, "roadLayer", "drawWailaRoadLayerOverlay")
+end
+
+local function drawWailaLayerClassOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.layerClassOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.layerClassOverlay) then
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.layerClassOverlay, "layerClass", "drawWailaLayerClassOverlay")
+end
+
 local function drawWailaForestOverlay(self)
     local wailaTrailTracer = g_currentMission.wailaTrailTracer
     if wailaTrailTracer == nil then
@@ -861,7 +890,8 @@ local function drawWailaForestOverlay(self)
         logOverlayStateOnce("forest", "notReady", "[TaskMap] drawWailaForestOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
         return
     end
-    renderMapOverlay(self, wailaTrailTracer.forestOverlay, "forest", "drawWailaForestOverlay")
+    -- debug colour mode (WAILA debug hub toggle): forest fully opaque so it is obvious
+    renderMapOverlay(self, wailaTrailTracer.forestOverlay, "forest", "drawWailaForestOverlay", wailaTrailTracer.debugColors and 1.0 or TaskMap.FOREST_OVERLAY_ALPHA)
 end
 
 -- Real request ("draw the forest patches underneath, so roads going
@@ -873,8 +903,10 @@ end
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaForestOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaDiagonalTestOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaLayerClassOverlay)
 
 -- Real, confirmed live find (2026-09-30, user + investigation of
 -- FS25_minimapPlus's own source): the reason nothing ever showed on the
@@ -934,8 +966,10 @@ function TaskMap:tryPatchAfterMinimapPlus()
         drawWailaForestOverlay(self)
         drawWailaTrailOverlay(self)
         drawWailaRoadOverlay(self)
+        drawWailaRoadLayerOverlay(self)
         drawWailaFeatureOverlay(self)
         drawWailaDiagonalTestOverlay(self)
+        drawWailaLayerClassOverlay(self)
     end)
     hasPatchedInstanceOnce = true
     lastKnownInstanceDrawFields = rawget(ingameMap, "drawFields")
