@@ -30,7 +30,6 @@ change from the rename itself.
 
     <extraSourceFiles>
         <sourceFile filename="scripts/FieldJobHotspot.lua" />
-        <sourceFile filename="scripts/TrailPointHotspot.lua" />
         <sourceFile filename="scripts/TaskMap.lua" />
     </extraSourceFiles>
 
@@ -41,36 +40,16 @@ change from the rename itself.
              registration, and this needs to work from the driver's seat
              too, since that's specifically where the "weird" live results
              get found and screenshotted. -->
-        <action name="TASKMAP_TRAIL_SCAN_NOW" axisType="HALF"/>
-        <!-- Real request: "enable the whole grid scanner to see how the
-             tiles line up," deliberately a SEPARATE action/key from
-             TASKMAP_TRAIL_SCAN_NOW, not a mode toggle on it, since this
-             one is a genuinely different order of magnitude in cost (a
-             whole 16x16 tile grid in one synchronous call, likely a
-             real multi-second freeze) and shouldn't ever fire by
-             accident from a key someone's used to pressing often. -->
         <action name="TASKMAP_TRAIL_SCAN_WHOLE_MAP" axisType="HALF"/>
     </actions>
 
-    <!-- Real collision, confirmed live: KEY_lshift KEY_r is also bound
-         to a collection/autoload mod's own "Start Loading" action, so
-         moved off it entirely rather than fighting over a shared combo.
-         KEY_lshift KEY_k isn't claimed by WAILA (M/J/L) or that mod's
-         own binding list either. -->
     <inputBinding>
-        <actionBinding action="TASKMAP_TRAIL_SCAN_NOW">
-            <binding device="KB_MOUSE_DEFAULT" input="KEY_lshift KEY_k" index="1" />
-        </actionBinding>
         <actionBinding action="TASKMAP_TRAIL_SCAN_WHOLE_MAP">
             <binding device="KB_MOUSE_DEFAULT" input="KEY_lshift KEY_g" index="1" />
         </actionBinding>
     </inputBinding>
 
     <l10n>
-        <text name="input_TASKMAP_TRAIL_SCAN_NOW">
-            <en>Rescan trails now</en>
-            <de>Trails jetzt neu scannen</de>
-        </text>
         <text name="input_TASKMAP_TRAIL_SCAN_WHOLE_MAP">
             <en>Rescan whole map (slow)</en>
             <de>Ganze Karte neu scannen (langsam)</de>
