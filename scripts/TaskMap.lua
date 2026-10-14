@@ -360,6 +360,9 @@ end
 -- semi-transparent and the base map's own roads/paths show through it.
 -- 1.0 = opaque (old look).
 TaskMap.FOREST_OVERLAY_ALPHA = 0.1
+-- Worn trails / paths: a subtle dark line, about half transparent (opaque in
+-- WAILA's debug colour mode).
+TaskMap.TRAIL_OVERLAY_ALPHA = 0.5
 
 -- Shared render path for any density-map-visualization overlay drawn
 -- onto IngameMap -- factored out once a SECOND overlay (the real-road-
@@ -428,7 +431,7 @@ local function drawWailaTrailOverlay(self)
         logOverlayStateOnce("trail", "notReady", "[TaskMap] drawWailaTrailOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
         return
     end
-    renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay")
+    renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay", wailaTrailTracer.debugColors and 1.0 or TaskMap.TRAIL_OVERLAY_ALPHA)
 end
 
 -- Real request ("go ahead, make sure both are drawn in distinct
