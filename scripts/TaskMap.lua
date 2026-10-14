@@ -431,33 +431,10 @@ local function drawWailaTrailOverlay(self)
     renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay")
 end
 
--- Real request ("prove to me you can write splines to the minimap"):
--- separate draw hook for the real-road-spline overlay
--- (WailaTrailTracer.buildRoadSplineOverlay) -- deliberately its OWN
--- independent hook, not folded into drawWailaTrailOverlay, so it can
--- succeed or fail independently and stay cleanly separable for the
--- planned "dedup discovered trails vs declared roads" step.
-local function drawWailaRoadOverlay(self)
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil then
-        logOverlayStateOnce("road", "noTracer", "[TaskMap] drawWailaRoadOverlay: g_currentMission.wailaTrailTracer is nil")
-        return
-    end
-    if wailaTrailTracer.roadOverlay == nil then
-        logOverlayStateOnce("road", "noOverlay", "[TaskMap] drawWailaRoadOverlay: wailaTrailTracer.roadOverlay is nil (run 'Build road overlay' from the debug hub first)")
-        return
-    end
-    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.roadOverlay) then
-        logOverlayStateOnce("road", "notReady", "[TaskMap] drawWailaRoadOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
-        return
-    end
-    renderMapOverlay(self, wailaTrailTracer.roadOverlay, "road", "drawWailaRoadOverlay")
-end
-
 -- Real request ("go ahead, make sure both are drawn in distinct
 -- colors"): third independent overlay for WailaTrailTracer.buildFeatureOverlay
 -- (tree/water, via real CollisionFlag.TREE/WATER raycasts) -- same
--- independent-hook reasoning as drawWailaRoadOverlay above.
+-- independent-hook reasoning as drawWailaTrailOverlay above.
 local function drawWailaFeatureOverlay(self)
     local wailaTrailTracer = g_currentMission.wailaTrailTracer
     if wailaTrailTracer == nil then
@@ -527,7 +504,6 @@ end
 -- patch instead of being covered by it.
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaForestOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
-IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaLayerClassOverlay)
@@ -589,7 +565,6 @@ function TaskMap:tryPatchAfterMinimapPlus()
     ingameMap.drawFields = Utils.appendedFunction(ingameMap.drawFields, function(self)
         drawWailaForestOverlay(self)
         drawWailaTrailOverlay(self)
-        drawWailaRoadOverlay(self)
         drawWailaRoadLayerOverlay(self)
         drawWailaFeatureOverlay(self)
         drawWailaLayerClassOverlay(self)
