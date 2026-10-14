@@ -388,7 +388,7 @@ local function renderMapOverlay(self, overlay, logKey, logLabel, alpha)
 
     logOverlayStateOnce(
         logKey,
-        string.format("rendering_%.3f_%.3f_%.3f_%.3f_%.3f_%.3f_%s", width, height, posX, posY, sizeX, sizeY, tostring(self.clipX1)),
+        "rendering", -- constant: the geometry changes every frame while panning/zooming, the heartbeat still logs the numbers
         "[TaskMap] %s: overlay ready, rendering (width=%.3f height=%.3f posX=%.3f posY=%.3f sizeX=%.3f sizeY=%.3f clipX1=%s)",
         logLabel, width, height, posX, posY, sizeX, sizeY, tostring(self.clipX1))
 
