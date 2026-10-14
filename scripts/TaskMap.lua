@@ -459,6 +459,17 @@ end
 -- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
 -- diversity classifier prototype, same independent-hook pattern as the
 -- other four.
+local function drawWailaBuildingLayerOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.buildingLayerOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.buildingLayerOverlay) then
+        return
+    end
+    renderMapOverlay(self, wailaTrailTracer.buildingLayerOverlay, "buildingLayer", "drawWailaBuildingLayerOverlay")
+end
+
 local function drawWailaRoadLayerOverlay(self)
     local wailaTrailTracer = g_currentMission.wailaTrailTracer
     if wailaTrailTracer == nil or wailaTrailTracer.roadLayerOverlay == nil then
@@ -507,6 +518,7 @@ end
 -- patch instead of being covered by it.
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaForestOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaBuildingLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaLayerClassOverlay)
@@ -568,6 +580,7 @@ function TaskMap:tryPatchAfterMinimapPlus()
     ingameMap.drawFields = Utils.appendedFunction(ingameMap.drawFields, function(self)
         drawWailaForestOverlay(self)
         drawWailaTrailOverlay(self)
+        drawWailaBuildingLayerOverlay(self)
         drawWailaRoadLayerOverlay(self)
         drawWailaFeatureOverlay(self)
         drawWailaLayerClassOverlay(self)
