@@ -236,70 +236,11 @@ function TaskMap:tickWholeMapScan()
     wailaTrailTracer.tickWholeMapScan()
 end
 
--- Real request ("would be nice to have a progress bar somewhere") --
--- plain on-screen text, not tied to IngameMap/drawFields at all (this
--- doesn't need to be positioned relative to the map, just visible).
--- Reads WailaTrailTracer.wholeMapScanState directly -- a plain field,
--- same cross-mod-safe access every other wailaTrailTracer.* read in
--- this file already uses. Only drawn while a scan is actually running.
+-- Intentionally empty: see the comment inside.
 function TaskMap:draw()
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil then
-        return
-    end
-
-    local state = wailaTrailTracer.wholeMapScanState
-    if state ~= nil then
-        local total = state.chunksPerSide * state.chunksPerSide
-        local done = state.row * state.chunksPerSide + state.col
-        local percent = total > 0 and (done / total * 100) or 0
-
-        -- Real bug this fixes, confirmed live: (0.02, 0.9) sat right on
-        -- top of the game's own keybind hint list (top-left), unreadable.
-        -- Moved to the top-right corner, right-aligned, away from both
-        -- that list and the minimap (bottom corners).
-        setTextColor(1, 1, 1, 1)
-        setTextAlignment(RenderText.ALIGN_RIGHT)
-        renderText(0.98, 0.88, 0.02, string.format("WAILA whole-map scan: %d / %d chunks (%.0f%%)", done, total, percent))
-    end
-
-    self:drawTrailPersistenceProgress()
-end
-
--- Real request ("~2m10s human loses patience... suppose we'd need
--- another progress bar"): a restore this size (confirmed live, 133s for
--- 42,631 polygons) has no visible sign of life otherwise -- the only
--- existing feedback was tickLoadFromXML's own log-only progress line,
--- invisible unless you're watching log.txt. Same bar shape/position
--- convention as the scan progress bar above, just one line lower so
--- both could show at once without overlapping (unlikely in practice,
--- but harmless to allow). Save gets the same treatment for the same
--- reason, even though nobody's complained about it specifically yet --
--- it's the same class of "long tick-budgeted operation with zero visual
--- feedback" problem, just currently faster (was 24-29s for these
--- polygon counts) so less likely to be noticed.
-function TaskMap:drawTrailPersistenceProgress()
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil then
-        return
-    end
-
-    setTextColor(1, 1, 1, 1)
-    setTextAlignment(RenderText.ALIGN_RIGHT)
-
-    local loadState = wailaTrailTracer.loadState
-    if loadState ~= nil then
-        local total = #loadState.workItems
-        local percent = total > 0 and (loadState.index / total * 100) or 0
-        renderText(0.98, 0.85, 0.02, string.format("WAILA trail restore: %d / %d polygons (%.0f%%)", loadState.index, total, percent))
-    end
-
-    local saveState = wailaTrailTracer.saveState
-    if saveState ~= nil then
-        local total = #saveState.workItems
-        local percent = total > 0 and (saveState.index / total * 100) or 0
-        renderText(0.98, 0.82, 0.02, string.format("WAILA trail save: %d / %d polygons (%.0f%%)", saveState.index, total, percent))
-    end
+    -- Scan / field sweep / restore / save progress used to be drawn here (top right, on top of
+    -- the contract bars). It lives in WAILA's HUD now: a strip under the mini panel
+    -- (WailaHud.collectTaskRows), one place for every WAILA job.
 end
 
 -- Real, explicit removal: the fixed-screen-rect version ("does the baked
@@ -363,6 +304,19 @@ TaskMap.FOREST_OVERLAY_ALPHA = 0.1
 -- Worn trails / paths: a subtle dark line, about half transparent (opaque in
 -- WAILA's debug colour mode).
 TaskMap.TRAIL_OVERLAY_ALPHA = 0.5
+
+-- Opacity / visibility per layer now come from WAILA's per-savegame map
+-- settings (debug hub, Map layers tab) through the tracer; the constants
+-- above are the fallback for an older WAILA without the accessors.
+local function layerAlpha(tracer, layer, fallback)
+    if tracer.getLayerAlpha ~= nil then
+        return tracer.getLayerAlpha(layer)
+    end
+    return tracer.debugColors and 1.0 or fallback
+end
+local function layerVisible(tracer, layer)
+    return tracer.isLayerVisible == nil or tracer.isLayerVisible(layer)
+end
 
 -- Shared render path for any density-map-visualization overlay drawn
 -- onto IngameMap -- factored out once a SECOND overlay (the real-road-
@@ -431,7 +385,9 @@ local function drawWailaTrailOverlay(self)
         logOverlayStateOnce("trail", "notReady", "[TaskMap] drawWailaTrailOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
         return
     end
-    renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay", wailaTrailTracer.debugColors and 1.0 or TaskMap.TRAIL_OVERLAY_ALPHA)
+    if layerVisible(wailaTrailTracer, "trail") then
+        renderMapOverlay(self, wailaTrailTracer.testOverlay, "trail", "drawWailaTrailOverlay", layerAlpha(wailaTrailTracer, "trail", TaskMap.TRAIL_OVERLAY_ALPHA))
+    end
 end
 
 -- Real request ("go ahead, make sure both are drawn in distinct
@@ -459,6 +415,32 @@ end
 -- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
 -- diversity classifier prototype, same independent-hook pattern as the
 -- other four.
+local function drawWailaWaterLayerOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.waterLayerOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.waterLayerOverlay) then
+        return
+    end
+    if layerVisible(wailaTrailTracer, "water") then
+        renderMapOverlay(self, wailaTrailTracer.waterLayerOverlay, "waterLayer", "drawWailaWaterLayerOverlay", layerAlpha(wailaTrailTracer, "water", 0.7))
+    end
+end
+
+local function drawWailaTreeLayerOverlay(self)
+    local wailaTrailTracer = g_currentMission.wailaTrailTracer
+    if wailaTrailTracer == nil or wailaTrailTracer.treeLayerOverlay == nil then
+        return
+    end
+    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.treeLayerOverlay) then
+        return
+    end
+    if layerVisible(wailaTrailTracer, "tree") then
+        renderMapOverlay(self, wailaTrailTracer.treeLayerOverlay, "treeLayer", "drawWailaTreeLayerOverlay", layerAlpha(wailaTrailTracer, "tree", 0.9))
+    end
+end
+
 local function drawWailaBuildingLayerOverlay(self)
     local wailaTrailTracer = g_currentMission.wailaTrailTracer
     if wailaTrailTracer == nil or wailaTrailTracer.buildingLayerOverlay == nil then
@@ -467,7 +449,9 @@ local function drawWailaBuildingLayerOverlay(self)
     if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.buildingLayerOverlay) then
         return
     end
-    renderMapOverlay(self, wailaTrailTracer.buildingLayerOverlay, "buildingLayer", "drawWailaBuildingLayerOverlay")
+    if layerVisible(wailaTrailTracer, "building") then
+        renderMapOverlay(self, wailaTrailTracer.buildingLayerOverlay, "buildingLayer", "drawWailaBuildingLayerOverlay", layerAlpha(wailaTrailTracer, "building", 1.0))
+    end
 end
 
 local function drawWailaRoadLayerOverlay(self)
@@ -478,7 +462,9 @@ local function drawWailaRoadLayerOverlay(self)
     if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.roadLayerOverlay) then
         return
     end
-    renderMapOverlay(self, wailaTrailTracer.roadLayerOverlay, "roadLayer", "drawWailaRoadLayerOverlay")
+    if layerVisible(wailaTrailTracer, "road") then
+        renderMapOverlay(self, wailaTrailTracer.roadLayerOverlay, "roadLayer", "drawWailaRoadLayerOverlay", layerAlpha(wailaTrailTracer, "road", 1.0))
+    end
 end
 
 local function drawWailaLayerClassOverlay(self)
@@ -507,7 +493,9 @@ local function drawWailaForestOverlay(self)
         return
     end
     -- debug colour mode (WAILA debug hub toggle): forest fully opaque so it is obvious
-    renderMapOverlay(self, wailaTrailTracer.forestOverlay, "forest", "drawWailaForestOverlay", wailaTrailTracer.debugColors and 1.0 or TaskMap.FOREST_OVERLAY_ALPHA)
+    if layerVisible(wailaTrailTracer, "forest") then
+        renderMapOverlay(self, wailaTrailTracer.forestOverlay, "forest", "drawWailaForestOverlay", layerAlpha(wailaTrailTracer, "forest", TaskMap.FOREST_OVERLAY_ALPHA))
+    end
 end
 
 -- Real request ("draw the forest patches underneath, so roads going
@@ -516,7 +504,9 @@ end
 -- everything before it). Forest goes first (bottom layer) specifically
 -- so real roads -- drawn after -- stay visible cutting through a forest
 -- patch instead of being covered by it.
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaWaterLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaForestOverlay)
+IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTreeLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaBuildingLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
@@ -578,7 +568,9 @@ function TaskMap:tryPatchAfterMinimapPlus()
     end
 
     ingameMap.drawFields = Utils.appendedFunction(ingameMap.drawFields, function(self)
+        drawWailaWaterLayerOverlay(self)
         drawWailaForestOverlay(self)
+        drawWailaTreeLayerOverlay(self)
         drawWailaTrailOverlay(self)
         drawWailaBuildingLayerOverlay(self)
         drawWailaRoadLayerOverlay(self)
