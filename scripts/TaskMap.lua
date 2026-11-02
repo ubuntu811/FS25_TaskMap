@@ -390,26 +390,6 @@ local function drawWailaTrailOverlay(self)
     end
 end
 
--- Real request ("go ahead, make sure both are drawn in distinct
--- colors"): third independent overlay for WailaTrailTracer.buildFeatureOverlay
--- (tree/water, via real CollisionFlag.TREE/WATER raycasts) -- same
--- independent-hook reasoning as drawWailaTrailOverlay above.
-local function drawWailaFeatureOverlay(self)
-    local wailaTrailTracer = g_currentMission.wailaTrailTracer
-    if wailaTrailTracer == nil then
-        logOverlayStateOnce("feature", "noTracer", "[TaskMap] drawWailaFeatureOverlay: g_currentMission.wailaTrailTracer is nil")
-        return
-    end
-    if wailaTrailTracer.featureOverlay == nil then
-        logOverlayStateOnce("feature", "noOverlay", "[TaskMap] drawWailaFeatureOverlay: wailaTrailTracer.featureOverlay is nil (run 'Build tree/water overlay' from the debug hub first)")
-        return
-    end
-    if not getIsDensityMapVisualizationOverlayReady(wailaTrailTracer.featureOverlay) then
-        logOverlayStateOnce("feature", "notReady", "[TaskMap] drawWailaFeatureOverlay: overlay exists but getIsDensityMapVisualizationOverlayReady returned false")
-        return
-    end
-    renderMapOverlay(self, wailaTrailTracer.featureOverlay, "feature", "drawWailaFeatureOverlay")
-end
 
 -- Real request ("classify space first... go ahead with the forests"):
 -- fifth overlay, for WailaTrailTracer.buildForestOverlay -- the material-
@@ -510,7 +490,6 @@ IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTre
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaTrailOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaBuildingLayerOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaRoadLayerOverlay)
-IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaFeatureOverlay)
 IngameMap.drawFields = Utils.appendedFunction(IngameMap.drawFields, drawWailaLayerClassOverlay)
 
 -- Real, confirmed live find (2026-09-30, user + investigation of
@@ -574,7 +553,6 @@ function TaskMap:tryPatchAfterMinimapPlus()
         drawWailaTrailOverlay(self)
         drawWailaBuildingLayerOverlay(self)
         drawWailaRoadLayerOverlay(self)
-        drawWailaFeatureOverlay(self)
         drawWailaLayerClassOverlay(self)
     end)
     hasPatchedInstanceOnce = true
