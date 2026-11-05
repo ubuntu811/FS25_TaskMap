@@ -101,3 +101,9 @@ the log says `[TaskMap] field click: ...`.
 The labels used to be unclickable: a hotspot without a click area gets no mouse events at all (the farmland tags have one). The "i" has a round one, as large as the farmland tag's is.
 
 Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 23 checks).
+
+### Where the "i" goes
+
+Not on top of the game's farmland number tags: each field's "i" (and its job letters) is put inside the field's polygon, away from every tag (they sit at the farmland's own spot), away from the field's own edge,
+and near its old position when that is a tie (`LabelPlacement.lua`, tested). It is worked out once per field and kept, a few fields per redraw, so it costs nothing; a field not worked out yet keeps its old spot
+for a moment. Test: `lua5.1 tests/label_placement_test.lua` (8 checks).

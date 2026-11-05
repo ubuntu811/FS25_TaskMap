@@ -71,6 +71,46 @@ end
 -- labelZ, sampleX, sampleZ, field, riceField}. field can be nil (WAILA
 -- hasn't refreshed it yet, e.g. right after its own cache load): the hotspot
 -- is there without letters until a later redraw has the jobs.
+TaskMap.LABELS_PER_REBUILD = 4          -- at most this many fields get their spot worked out in one redraw (a few hundred operations a candidate); the rest wait for the next one
+
+-- The "i" of a field: inside its polygon, away from the farmland number tags (it used to sit on top of them). Worked out once per field (kept until its outline or the tags change); a field that has not been
+-- worked out yet keeps its old position for now.
+function TaskMap:labelPositionFor(entry)
+    self.labelCache = self.labelCache or {}
+    local tags = self:farmlandTagPositions()
+    local polygonSize = entry.boundaryPositions ~= nil and #entry.boundaryPositions or 0
+    local cached = self.labelCache[entry.wailaFieldId]
+    if cached ~= nil and cached.polygonSize == polygonSize and cached.tagCount == #tags then
+        return cached.x, cached.z
+    end
+    if (self.labelsThisRebuild or 0) >= TaskMap.LABELS_PER_REBUILD then
+        return cached ~= nil and cached.x or entry.labelX, cached ~= nil and cached.z or entry.labelZ
+    end
+    self.labelsThisRebuild = (self.labelsThisRebuild or 0) + 1
+    local x, z = LabelPlacement.pick(entry.boundaryPositions, tags, entry.labelX, entry.labelZ, entry.sampleX, entry.sampleZ)
+    self.labelCache[entry.wailaFieldId] = { x = x, z = z, polygonSize = polygonSize, tagCount = #tags }
+    return x, z
+end
+
+-- Where the game's farmland number tags are (their map hotspots), refreshed once per redraw: { { x, z } ... }.
+function TaskMap:farmlandTagPositions()
+    if self.tagsAtRebuild ~= self.rebuildCount then
+        self.tagsAtRebuild = self.rebuildCount
+        self.tags = {}
+        local farmlands = g_farmlandManager ~= nil and g_farmlandManager.farmlands or nil
+        for _, farmland in pairs(farmlands or {}) do
+            local hotspot = farmland.mapHotspot
+            if hotspot ~= nil and farmland.showOnFarmlandsScreen then
+                local x, z = hotspot:getWorldPosition()
+                if x ~= nil then
+                    self.tags[#self.tags + 1] = { x, z }
+                end
+            end
+        end
+    end
+    return self.tags
+end
+
 function TaskMap:addHotspotIfNeeded(ingameMap, entry)
     -- every field gets a hotspot (the "i" you click for the field's popup), with the job letters beside it when there are any
     local letters = {}
@@ -86,7 +126,8 @@ function TaskMap:addHotspotIfNeeded(ingameMap, entry)
     local color = TaskMap.LABEL_COLOR
     local hotspot = FieldJobHotspot.new()
     hotspot:setJob(table.concat(letters, " "), color[1], color[2], color[3])
-    hotspot:setWorldPosition(entry.labelX, entry.labelZ)
+    local labelX, labelZ = self:labelPositionFor(entry)
+    hotspot:setWorldPosition(labelX, labelZ)
     hotspot.entry = entry                                                                              -- (FieldClick: the field this "i" belongs to)
     hotspot.visitX, hotspot.visitZ = entry.sampleX or entry.labelX, entry.sampleZ or entry.labelZ     -- (a point inside the field: where Visit goes)
     ingameMap:addMapHotspot(hotspot)
@@ -118,6 +159,8 @@ function TaskMap:rebuildAllHotspots()
         ingameMap:removeMapHotspot(hotspot)
     end
     self.activeHotspots = {}
+    self.rebuildCount = (self.rebuildCount or 0) + 1
+    self.labelsThisRebuild = 0
 
     local entries = g_currentMission.waila.getAll("field")
     if entries == nil then
