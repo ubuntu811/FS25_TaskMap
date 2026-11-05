@@ -25,7 +25,7 @@ mkdir -p $BUILD_DIR
 
 echo "--> Copying production files to staging area..."
 # Copy the core runtime logic and metadata
-for i in icon.dds scripts/ l10n/ modDesc.xml; do
+for i in icon.dds scripts/ l10n/ hud/ modDesc.xml; do
   cp -r "$i" "$BUILD_DIR/$i"
 done
 

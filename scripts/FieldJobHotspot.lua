@@ -51,7 +51,22 @@ local FieldJobHotspot_mt = Class(FieldJobHotspot, MapHotspot)
 FieldJobHotspot.MINIMAP_SCALE_MULTIPLIER = 0.6
 FieldJobHotspot.CLICK_RADIUS_FACTOR = 0.55     -- of the (scaled) width: the "i" badge is clickable a little beyond its outline
 FieldJobHotspot.BADGE_RADIUS_FACTOR = 0.42
-FieldJobHotspot.BADGE_COLOR = { 0.05, 0.38, 0.95 }       -- a solid blue disc with a white rim and a white i
+-- The badge is an image of our own (hud/infoBadge.dds: a solid blue disc, a white rim, a white i): the game's round hotspot slice is only a ring, tinting it never filled it. g_currentModDirectory exists only
+-- while the scripts load, so it is kept now; createImageOverlay gives the engine's integer id (like RoadFollow's HUD).
+FieldJobHotspot.modDirectory = g_currentModDirectory
+
+local function badgeOverlay()
+    if FieldJobHotspot.badge == nil and not FieldJobHotspot.badgeFailed then
+        local ok, overlay = pcall(function() return createImageOverlay(FieldJobHotspot.modDirectory .. "hud/infoBadge.dds") end)
+        if ok and overlay ~= nil then
+            FieldJobHotspot.badge = overlay
+        else
+            FieldJobHotspot.badgeFailed = true       -- said once, then the outline circle is drawn instead
+            print(string.format("[TaskMap] the i badge image could not be loaded (%s, directory %s): an outline circle it is", tostring(overlay), tostring(FieldJobHotspot.modDirectory)))
+        end
+    end
+    return FieldJobHotspot.badge
+end
 local function isMinimapLayout(layout)
     return layout ~= nil and (layout:isa(IngameMapLayoutCircle) or layout:isa(IngameMapLayoutSquare) or layout:isa(IngameMapLayoutSquareLarge))
 end
@@ -63,11 +78,6 @@ function FieldJobHotspot.new(customMt)
     self.minFullscreenTextSize = minFullscreenTextSize
     self.label = ""
     self.forceNoRotation = true
-    -- the badge: the game's own round hotspot slice, tinted (MapHotspot deletes self.icon with the hotspot); without it the "i" gets an outline circle
-    if g_overlayManager ~= nil then
-        local ok, overlay = pcall(g_overlayManager.createOverlay, g_overlayManager, "mapHotspots.circle", 0, 0, self.width, self.height)
-        self.icon = ok and overlay or nil
-    end
     self.isFieldInfoHotspot = true                                   -- (FieldClick: a click on the "i" selects the field's farmland popup)
     self.clickArea = MapHotspot.getClickCircle(FieldJobHotspot.CLICK_RADIUS_FACTOR)   -- (no click area = no mouse events at all, which is why the labels never reacted)
     return self
@@ -129,20 +139,19 @@ function FieldJobHotspot:render(x, y, rotation, small)
         local centerX, centerY = x + width * 0.5, y + height * 0.5
         local radius = width * FieldJobHotspot.BADGE_RADIUS_FACTOR
         local aspect = self.height / self.width                                                              -- (screen units are not square: the same number is wider than tall; this makes the circle round)
-        local badge = self.icon
+        local badge = badgeOverlay()
         if badge ~= nil then
-            local rim = radius * 1.14
-            local blue = FieldJobHotspot.BADGE_COLOR
-            badge:renderCustom(centerX - rim, centerY - rim * aspect, rim * 2, rim * 2 * aspect, 1, 1, 1, a)                 -- (a white rim: the field colours behind can be blue too)
-            badge:renderCustom(centerX - radius, centerY - radius * aspect, radius * 2, radius * 2 * aspect, blue[1], blue[2], blue[3], a)
+            local rim = radius * 1.14                                                                        -- (the image has its white rim inside: drawn a little larger than the click circle)
+            setOverlayColor(badge, 1, 1, 1, a)
+            renderOverlay(badge, centerX - rim, centerY - rim * aspect, rim * 2, rim * 2 * aspect)
         else
             drawOutlineCircle2D(centerX + g_pixelSizeX, centerY - g_pixelSizeY, radius, 0.0022, 24, 0, 0, 0, a)
             drawOutlineCircle2D(centerX, centerY, radius, 0.0016, 24, 1, 1, 1, a)
+            setTextAlignment(RenderText.ALIGN_CENTER)
+            local iSize = radius * aspect * 1.5
+            setTextColor(1, 1, 1, a)
+            renderText(centerX, centerY - iSize * 0.36, iSize, "i")                                          -- (only the fallback draws the i as text)
         end
-        setTextAlignment(RenderText.ALIGN_CENTER)
-        local iSize = radius * aspect * 1.5
-        setTextColor(1, 1, 1, a)
-        renderText(centerX, centerY - iSize * 0.36, iSize, "i")
         if hasLetters then
             setTextAlignment(RenderText.ALIGN_LEFT)
             local textX = centerX + radius + width * 0.2
