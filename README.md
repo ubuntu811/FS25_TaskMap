@@ -87,3 +87,11 @@ Two ways forward, your call:
   you want it later (possibly derivable as "tilled but not `CROPS`-flagged"
   by combining two overlays, but that's genuinely new logic, not something
   already sitting there like the others).
+
+## Click a field on the big map
+
+A click on a field's ground (no label needed: a field with nothing to do has none, and a map made field by field has no field numbers) selects its farmland, which shows the game's
+own popup: Farmland, size, value, **Visit**, Sell, Tag place. Visit takes you to the spot you clicked, not to the middle of the farmland. The popup's free line says what grows there
+("Wheat, growing"). Clicking bare ground deselects as before; the farmland overview and the AI worker lists are left to the game.
+
+Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 15 checks).
