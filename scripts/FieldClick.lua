@@ -1,20 +1,82 @@
 --[[
-    FieldClick.lua -- the big map: a click on a field (its ground, no label needed) gives the same popup as the farmland tag: Farmland, size, value, Visit, Sell, Tag place.
-    Visit takes you to the spot you clicked, in that field, not to the middle of the farmland. The popup's empty line under its title says what grows there ("Wheat, growing").
+    FieldClick.lua -- the big map: a click on a field (anywhere inside its polygon) or on the "i" at its corner opens a popup about THAT FIELD: "Field 7", its size (from WAILA's own traced polygon), what
+    grows there, and Visit (to a point inside the field). Not the farmland popup: the buyable original farmlands and the fields a map has after it was changed have no relation, so a farmland's name,
+    size and price say nothing about the field you clicked, and Sell / Tag place would act on the farmland.
 
-    Why: the field labels (TaskMap) exist only where there is something to do, and a map made field by field after the fact has no field numbers at all, so there was nothing to click.
-
-    How (read from the game's InGameMenuMapFrame): the map reports a click on the bare map to onClickMap; in the overview mode the game then deselects. After that, when the point is
-    field ground (the same FieldState test the game's hover box uses) the farmland's own map hotspot is selected, which makes the game show its farmland popup. Visit
-    (onClickVisitPlace) is overwritten only while that selection is ours. Everything in a pcall: if it does not fit, the map behaves as it did and a line says why.
+    How (read from the game's InGameMenuMapFrame): the popup with a Visit button is the farmland popup (contextBoxFarmland), shown for a FarmlandHotspot. So the farmland under the field is selected
+    (the game builds the popup), then everything is replaced: the title, the size, the second row (the crop instead of the value), the buttons (Visit only: setMapInputContext) and the
+    farmland highlight on the map (selectedFarmland nil). The popup sits at the field's "i". Visit (onClickVisitPlace) is overwritten only while the selection is ours. Everything in a pcall: if it does
+    not fit, the map behaves as it did and a line says why.
 ]]
 FieldClick = {}
+FieldClick.modName = g_currentModName
 
 local function say(format, ...)
     print(string.format("[TaskMap] " .. format, ...))
 end
 
--- "Wheat, growing": what stands on the field at the spot, or nil when it is bare (nothing worth a line).
+local function text(key, ...)
+    local value = g_i18n:getText(key, FieldClick.modName)
+    if select("#", ...) > 0 then
+        return string.format(value, ...)
+    end
+    return value
+end
+
+-- ===== plain geometry =====
+
+-- Is (x, z) inside the polygon (a list of { x, z })?
+function FieldClick.pointInPolygon(points, x, z)
+    local inside = false
+    local n = #points
+    local j = n
+    for i = 1, n do
+        local xi, zi, xj, zj = points[i][1], points[i][2], points[j][1], points[j][2]
+        if (zi > z) ~= (zj > z) and x < (xj - xi) * (z - zi) / (zj - zi) + xi then
+            inside = not inside
+        end
+        j = i
+    end
+    return inside
+end
+
+-- The area of the polygon in hectares (the shoelace formula; world coordinates are metres).
+function FieldClick.polygonAreaHa(points)
+    local sum = 0
+    local n = #points
+    local j = n
+    for i = 1, n do
+        sum = sum + (points[j][1] + points[i][1]) * (points[j][2] - points[i][2])
+        j = i
+    end
+    return math.abs(sum) * 0.5 / 10000
+end
+
+-- The WAILA field (its registry entry) whose traced polygon contains (x, z), or nil.
+function FieldClick.entryAt(x, z)
+    local waila = g_currentMission ~= nil and g_currentMission.waila or nil
+    local entries = waila ~= nil and waila.getAll("field") or nil
+    for _, entry in ipairs(entries or {}) do
+        if entry.boundaryPositions ~= nil and #entry.boundaryPositions >= 3 and FieldClick.pointInPolygon(entry.boundaryPositions, x, z) then
+            return entry
+        end
+    end
+    return nil
+end
+
+-- The hotspot (the "i") TaskMap keeps for an entry.
+function FieldClick.hotspotOf(entry)
+    for _, hotspot in ipairs(g_taskMap ~= nil and g_taskMap.activeHotspots or {}) do
+        if hotspot.entry == entry then
+            return hotspot
+        end
+    end
+    return nil
+end
+
+-- ===== the popup =====
+
+-- "Wheat, growing": what stands on the field at the spot; nil when nothing does.
 function FieldClick.statusText(fieldInfo)
     local fruitTypeIndex = fieldInfo.fruitTypeIndex
     if fruitTypeIndex == nil or fruitTypeIndex == FruitType.UNKNOWN then
@@ -44,21 +106,65 @@ function FieldClick.statusText(fieldInfo)
     return string.format("%s, %s", title, g_i18n:getText(key))
 end
 
--- The popup's free line: after the farm name (multiplayer) when there is one.
-local function setStatusLine(frame, text)
-    local box = frame.contextBoxFarmland
-    local element = box ~= nil and box:getDescendantByName("farm") or nil
-    if element == nil or text == nil then
-        return
+-- The static "Value:" label of the farmland popup (an unnamed Text next to the farmlandValue one): found by its text.
+local function findValueLabel(box)
+    local wanted = string.lower((g_i18n:getText("ui_sellValue") or ""):gsub(":", ""))
+    if wanted == "" then
+        return nil
     end
-    local old = element.text
-    if type(old) == "string" and old ~= "" then
-        text = old .. " - " .. text
+    for _, element in ipairs(box.elements or {}) do
+        local value = element.text
+        if type(value) == "string" and string.lower(value:gsub(":", "")) == wanted then
+            return element
+        end
     end
-    element:setText(text)
+    return nil
 end
 
--- A click on the bare map at (worldX, worldZ): select the field's farmland. true when it did.
+-- Select the field's farmland (the game builds its popup), then make the popup the field's.
+function FieldClick.show(frame, hotspot)
+    local entry = hotspot.entry
+    local visitX, visitZ = hotspot.visitX or hotspot.worldX, hotspot.visitZ or hotspot.worldZ
+    local farmland = g_farmlandManager:getFarmlandAtWorldPosition(visitX, visitZ)
+    local farmHotspot = farmland ~= nil and farmland:getMapHotspot() or nil
+    if farmHotspot == nil then
+        return false                                    -- (a field outside every farmland: nothing to host the popup)
+    end
+    FieldClick.internal = true
+    local ok, err = pcall(frame.setMapSelectionItem, frame, farmHotspot)
+    FieldClick.internal = false
+    if not ok then
+        error(err)
+    end
+    frame.selectedFarmland = nil                        -- (no farmland highlight on the map: it is not the farmland that was clicked)
+    frame.needsOverlayUpdate = true
+    if frame.ingameMapBase ~= nil then
+        frame.ingameMapBase:setSelectedHotspot(hotspot)
+    end
+    frame:setMapInputContext(false, false, false, true, false, false, false, false, false)       -- Visit only (Sell and Tag place would act on the farmland)
+    frame:refreshContextInput()
+    local box = frame.contextBoxFarmland
+    InGameMenuMapUtil.showContextBox(box, hotspot, text("tm_fieldTitle", entry ~= nil and entry.wailaFieldId or 0), nil, nil, nil, nil, false, false, false)
+    local sizeElement = box:getDescendantByName("farmlandSize")
+    local valueElement = box:getDescendantByName("farmlandValue")
+    if sizeElement ~= nil and entry ~= nil and entry.boundaryPositions ~= nil then
+        sizeElement:setText(g_i18n:formatArea(FieldClick.polygonAreaHa(entry.boundaryPositions), 2))
+    end
+    FieldClick.fieldState = FieldClick.fieldState or FieldState.new()
+    FieldClick.fieldState:update(visitX, visitZ)
+    local status = FieldClick.statusText(FieldClick.fieldState) or text("tm_bare")
+    if valueElement ~= nil then
+        valueElement:setText(status)
+    end
+    local label = findValueLabel(box)
+    if label ~= nil then
+        label:setText(text("tm_crop"))
+    end
+    frame.tmField = { hotspot = farmHotspot, x = visitX, z = visitZ }
+    return true
+end
+
+-- A click on the bare map at (worldX, worldZ): inside a WAILA field's polygon, select that field.
 function FieldClick.onClickMap(frame, worldX, worldZ)
     if frame.isPickingLocation or frame.isPickingRotation then
         return false
@@ -69,26 +175,15 @@ function FieldClick.onClickMap(frame, worldX, worldZ)
     if frame.mode ~= InGameMenuMapFrame.AI_MODE_OVERVIEW then
         return false
     end
-    FieldClick.fieldState = FieldClick.fieldState or FieldState.new()
-    local fieldInfo = FieldClick.fieldState
-    fieldInfo:update(worldX, worldZ)
-    if fieldInfo.groundType == FieldGroundType.NONE then
-        return false
-    end
-    local farmland = g_farmlandManager:getFarmlandAtWorldPosition(worldX, worldZ)
-    local hotspot = farmland ~= nil and farmland:getMapHotspot() or nil
+    local entry = FieldClick.entryAt(worldX, worldZ)
+    local hotspot = entry ~= nil and FieldClick.hotspotOf(entry) or nil
     if hotspot == nil then
         return false
     end
-    FieldClick.internal = true
-    frame:setMapSelectionItem(hotspot)
-    FieldClick.internal = false
-    frame.tmField = { hotspot = hotspot, x = worldX, z = worldZ }
-    setStatusLine(frame, FieldClick.statusText(fieldInfo))
-    return true
+    return FieldClick.show(frame, hotspot)
 end
 
--- Visit while the selection is ours: to the clicked spot. false when it is not (the game's own Visit then runs).
+-- Visit while the selection is ours: to a point inside the field. false when it is not (the game's own Visit then runs).
 function FieldClick.visit(frame)
     local field = frame.tmField
     if field == nil or frame.currentHotspot ~= field.hotspot then
@@ -111,11 +206,22 @@ if InGameMenuMapFrame ~= nil and not FieldClick.hooked then
             say("field click: %s", tostring(err))
         end
     end)
-    -- any other selection (a tag, a vehicle, nothing) ends ours
-    InGameMenuMapFrame.setMapSelectionItem = Utils.prependedFunction(InGameMenuMapFrame.setMapSelectionItem, function(self)
+    -- a click on an "i" selects the field; any other selection (a tag, a vehicle, nothing) ends ours
+    InGameMenuMapFrame.setMapSelectionItem = Utils.overwrittenFunction(InGameMenuMapFrame.setMapSelectionItem, function(self, superFunc, hotspot)
         if not FieldClick.internal then
             self.tmField = nil
+            if hotspot ~= nil and hotspot.isFieldInfoHotspot then
+                local ok, shown = pcall(FieldClick.show, self, hotspot)
+                if ok and shown then
+                    return
+                end
+                if not ok then
+                    say("field click, selecting: %s", tostring(shown))
+                end
+                return superFunc(self, nil)                -- (it cannot be shown: deselect, as a click on nothing does)
+            end
         end
+        return superFunc(self, hotspot)
     end)
     InGameMenuMapFrame.onClickVisitPlace = Utils.overwrittenFunction(InGameMenuMapFrame.onClickVisitPlace, function(self, superFunc)
         local ok, handled = pcall(FieldClick.visit, self)

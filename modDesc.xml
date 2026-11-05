@@ -55,5 +55,17 @@ change from the rename itself.
             <en>Rescan whole map (slow)</en>
             <de>Ganze Karte neu scannen (langsam)</de>
         </text>
+        <text name="tm_fieldTitle">
+            <en>Field %d</en>
+            <de>Feld %d</de>
+        </text>
+        <text name="tm_crop">
+            <en>Crop:</en>
+            <de>Frucht:</de>
+        </text>
+        <text name="tm_bare">
+            <en>nothing growing</en>
+            <de>nichts angebaut</de>
+        </text>
     </l10n>
 </modDesc>

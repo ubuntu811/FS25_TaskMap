@@ -90,8 +90,14 @@ Two ways forward, your call:
 
 ## Click a field on the big map
 
-A click on a field's ground (no label needed: a field with nothing to do has none, and a map made field by field has no field numbers) selects its farmland, which shows the game's
-own popup: Farmland, size, value, **Visit**, Sell, Tag place. Visit takes you to the spot you clicked, not to the middle of the farmland. The popup's free line says what grows there
-("Wheat, growing"). Clicking bare ground deselects as before; the farmland overview and the AI worker lists are left to the game.
+Every field has a small **"i"** at its corner on the big map (the job letters, where there are any, sit to its right), and a click **anywhere inside the field's polygon** does the same as a click on the
+"i": a popup about **that field** - "Field 7", its size (from WAILA's own traced polygon), what grows there ("Wheat, growing"), and **Visit**, which takes you to a point inside the field. Nothing else: no Sell
+and no Tag place, no farmland highlight.
 
-Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 15 checks).
+Why not the farmland popup: the buyable original farmlands and the fields a map has once it was changed afterwards have no relation, so a farmland's name, size and price say nothing about the field
+(and Sell would sell the farmland). The game's farmland popup is only the host (it is the one with a Visit button); everything in it is replaced. If anything does not fit, the map behaves as before and
+the log says `[TaskMap] field click: ...`.
+
+The labels used to be unclickable: a hotspot without a click area gets no mouse events at all (the farmland tags have one). The "i" has a round one, as large as the farmland tag's is.
+
+Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 23 checks).

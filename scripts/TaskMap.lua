@@ -69,28 +69,26 @@ end
 
 -- entry: one of Waila.getAll("field")'s entries -- {wailaFieldId, labelX,
 -- labelZ, sampleX, sampleZ, field, riceField}. field can be nil (WAILA
--- hasn't refreshed it yet, e.g. right after its own cache load) -- skip
--- silently, it'll show up on a later redraw once WAILA populates it.
+-- hasn't refreshed it yet, e.g. right after its own cache load): the hotspot
+-- is there without letters until a later redraw has the jobs.
 function TaskMap:addHotspotIfNeeded(ingameMap, entry)
-    if entry.field == nil then
-        return
-    end
-
+    -- every field gets a hotspot (the "i" you click for the field's popup), with the job letters beside it when there are any
     local letters = {}
-    for _, jobType in ipairs(entry.field.jobs) do
-        local letter = g_currentMission.waila.getJobLetter(jobType)
-        if letter ~= nil then
-            table.insert(letters, letter)
+    if entry.field ~= nil then
+        for _, jobType in ipairs(entry.field.jobs) do
+            local letter = g_currentMission.waila.getJobLetter(jobType)
+            if letter ~= nil then
+                table.insert(letters, letter)
+            end
         end
-    end
-    if #letters == 0 then
-        return
     end
 
     local color = TaskMap.LABEL_COLOR
     local hotspot = FieldJobHotspot.new()
     hotspot:setJob(table.concat(letters, " "), color[1], color[2], color[3])
     hotspot:setWorldPosition(entry.labelX, entry.labelZ)
+    hotspot.entry = entry                                                                              -- (FieldClick: the field this "i" belongs to)
+    hotspot.visitX, hotspot.visitZ = entry.sampleX or entry.labelX, entry.sampleZ or entry.labelZ     -- (a point inside the field: where Visit goes)
     ingameMap:addMapHotspot(hotspot)
     table.insert(self.activeHotspots, hotspot)
 end

@@ -49,6 +49,8 @@ local FieldJobHotspot_mt = Class(FieldJobHotspot, MapHotspot)
 -- fullscreen instead of multiplying the whole range, so the already-good
 -- zoomed-in end doesn't get blown up just to fix the zoomed-out end.
 FieldJobHotspot.MINIMAP_SCALE_MULTIPLIER = 0.6
+FieldJobHotspot.CLICK_RADIUS_FACTOR = 0.55     -- of the (scaled) width: the "i" badge is clickable a little beyond its outline
+FieldJobHotspot.BADGE_RADIUS_FACTOR = 0.42
 local function isMinimapLayout(layout)
     return layout ~= nil and (layout:isa(IngameMapLayoutCircle) or layout:isa(IngameMapLayoutSquare) or layout:isa(IngameMapLayoutSquareLarge))
 end
@@ -58,8 +60,10 @@ function FieldJobHotspot.new(customMt)
     self.width, self.height = getNormalizedScreenValues(28, 28)
     local _, minFullscreenTextSize = getNormalizedScreenValues(0, 16)
     self.minFullscreenTextSize = minFullscreenTextSize
-    self.label = "?"
+    self.label = ""
     self.forceNoRotation = true
+    self.isFieldInfoHotspot = true                                   -- (FieldClick: a click on the "i" selects the field's farmland popup)
+    self.clickArea = MapHotspot.getClickCircle(FieldJobHotspot.CLICK_RADIUS_FACTOR)   -- (no click area = no mouse events at all, which is why the labels never reacted)
     return self
 end
 
@@ -72,16 +76,17 @@ function FieldJobHotspot:getCategory()
     return MapHotspot.CATEGORY_FIELD
 end
 
+-- (the size as drawn: the click area is measured from it, so it must follow the zoom like the drawing does)
 function FieldJobHotspot:getWidth()
-    return self.width
+    return self.width * (self.scale or 1)
 end
 
 function FieldJobHotspot:getHeight()
-    return self.height
+    return self.height * (self.scale or 1)
 end
 
 function FieldJobHotspot:getDimension()
-    return self.width, self.height
+    return self:getWidth(), self:getHeight()
 end
 
 function FieldJobHotspot:render(x, y, rotation, small)
@@ -96,23 +101,45 @@ function FieldJobHotspot:render(x, y, rotation, small)
     local scale = self.scale or 1
     local width = self.width * scale
     local height = self.height * scale
-    local textY = y
-    local textX = x + width * 0.5
-    local textSize = height * 0.8
-    if isMinimapLayout(self.lastScreenLayout) then
-        textSize = textSize * FieldJobHotspot.MINIMAP_SCALE_MULTIPLIER
-    else
-        textSize = math.max(textSize, self.minFullscreenTextSize)
-    end
     local color = self.color
     local a = self.isBlinking and self:getCanBlink() and IngameMap.alpha or 1
+    local hasLetters = self.label ~= ""
+    local minimap = isMinimapLayout(self.lastScreenLayout)
 
     setTextBold(true)
-    setTextAlignment(RenderText.ALIGN_CENTER)
-    setTextColor(0, 0, 0, a)
-    renderText(textX + g_pixelSizeX, textY - g_pixelSizeY, textSize, self.label)
-    setTextColor(color[1], color[2], color[3], a)
-    renderText(textX, textY, textSize, self.label)
+    if minimap then
+        -- the minimap is not clickable: the letters only, centred on the corner as before; a field with nothing to do shows nothing
+        if hasLetters then
+            local textSize = height * 0.8 * FieldJobHotspot.MINIMAP_SCALE_MULTIPLIER
+            setTextAlignment(RenderText.ALIGN_CENTER)
+            setTextColor(0, 0, 0, a)
+            renderText(x + width * 0.5 + g_pixelSizeX, y - g_pixelSizeY, textSize, self.label)
+            setTextColor(color[1], color[2], color[3], a)
+            renderText(x + width * 0.5, y, textSize, self.label)
+        end
+    else
+        -- the big map: a small "i" badge (the clickable part, centred on the hotspot) and the job letters to its right
+        local textSize = math.max(height * 0.8, self.minFullscreenTextSize)
+        local centerX, centerY = x + width * 0.5, y + height * 0.5
+        local radius = width * FieldJobHotspot.BADGE_RADIUS_FACTOR
+        drawOutlineCircle2D(centerX + g_pixelSizeX, centerY - g_pixelSizeY, radius, 0.0022, 24, 0, 0, 0, a)
+        drawOutlineCircle2D(centerX, centerY, radius, 0.0016, 24, 1, 1, 1, a)
+        setTextAlignment(RenderText.ALIGN_CENTER)
+        local iSize = radius * 1.5
+        setTextColor(0, 0, 0, a)
+        renderText(centerX + g_pixelSizeX, centerY - iSize * 0.36 - g_pixelSizeY, iSize, "i")
+        setTextColor(1, 1, 1, a)
+        renderText(centerX, centerY - iSize * 0.36, iSize, "i")
+        if hasLetters then
+            setTextAlignment(RenderText.ALIGN_LEFT)
+            local textX = centerX + radius + width * 0.2
+            local textY = centerY - textSize * 0.36
+            setTextColor(0, 0, 0, a)
+            renderText(textX + g_pixelSizeX, textY - g_pixelSizeY, textSize, self.label)
+            setTextColor(color[1], color[2], color[3], a)
+            renderText(textX, textY, textSize, self.label)
+        end
+    end
     setTextAlignment(RenderText.ALIGN_LEFT)
     setTextBold(false)
     setTextColor(1, 1, 1, 1)
