@@ -5,7 +5,7 @@
 
     How (read from the game's InGameMenuMapFrame): the popup with a Visit button is the farmland popup (contextBoxFarmland), shown for a FarmlandHotspot. So the farmland under the field is selected
     (the game builds the popup), then everything is replaced: the title, the size, the second row (the crop instead of the value), the buttons (Visit only: setMapInputContext) and the
-    farmland highlight on the map (selectedFarmland nil). The popup sits at the field's "i". Visit (onClickVisitPlace) is overwritten only while the selection is ours. Everything in a pcall: if it does
+    farmland highlight on the map (selectedFarmland nil). The popup sits at the field's "i". Visit (onClickVisitPlace) is overwritten only while the selection is ours (and the frame's captured Visit callback is pointed at it). Everything in a pcall: if it does
     not fit, the map behaves as it did and a line says why.
 ]]
 FieldClick = {}
@@ -124,8 +124,16 @@ end
 -- Select the field's farmland (the game builds its popup), then make the popup the field's.
 function FieldClick.show(frame, hotspot)
     local entry = hotspot.entry
-    local visitX, visitZ = hotspot.visitX or hotspot.worldX, hotspot.visitZ or hotspot.worldZ
+    -- Visit goes to the "i" itself; when that lies outside the field's polygon (a corner on the headland edge) to a point WAILA found inside it
+    local visitX, visitZ = hotspot.worldX, hotspot.worldZ
+    if entry ~= nil and entry.boundaryPositions ~= nil and #entry.boundaryPositions >= 3 and not FieldClick.pointInPolygon(entry.boundaryPositions, visitX, visitZ) then
+        visitX, visitZ = hotspot.visitX or visitX, hotspot.visitZ or visitZ
+    end
+    -- the farmland that hosts the popup: under the "i", else under the point WAILA found inside the field
     local farmland = g_farmlandManager:getFarmlandAtWorldPosition(visitX, visitZ)
+    if farmland == nil and hotspot.visitX ~= nil then
+        farmland = g_farmlandManager:getFarmlandAtWorldPosition(hotspot.visitX, hotspot.visitZ)
+    end
     local farmHotspot = farmland ~= nil and farmland:getMapHotspot() or nil
     if farmHotspot == nil then
         return false                                    -- (a field outside every farmland: nothing to host the popup)
@@ -159,6 +167,11 @@ function FieldClick.show(frame, hotspot)
     local label = findValueLabel(box)
     if label ~= nil then
         label:setText(text("tm_crop"))
+    end
+    -- the frame took the Visit callback (the game's own function) when it was built, before this file patched the class: point it at the patched one, or the game's Visit runs and goes to the farmland tag
+    local action = frame.contextActions ~= nil and frame.contextActions[InGameMenuMapFrame.ACTIONS.VISIT_PLACE] or nil
+    if action ~= nil then
+        action.callback = frame.onClickVisitPlace
     end
     frame.tmField = { hotspot = farmHotspot, x = visitX, z = visitZ }
     return true

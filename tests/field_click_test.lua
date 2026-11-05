@@ -19,7 +19,7 @@ local fruit = { fillType = { title = "Wheat" }, name = "WHEAT", getIsCut = funct
 g_fruitTypeManager = { getFruitTypeByIndex = function(_, i) return i == 1 and fruit or nil end }
 local fieldAt = {}
 FieldState = { new = function() return { update = function(self, x, z)
-    local f = fieldAt[x .. "," .. z] or { fruitTypeIndex = 0, growthState = 0 }
+    local f = fieldAt["50,50"] or { fruitTypeIndex = 0, growthState = 0 }     -- (one crop for the whole fake field)
     self.fruitTypeIndex, self.growthState = f.fruitTypeIndex, f.growthState
 end } end }
 
@@ -46,13 +46,14 @@ local selected = "none"
 local shown, highlight, inputContext, refreshed = nil, nil, nil, 0
 InGameMenuMapUtil = { showContextBox = function(box, hotspot, description, ...) shown = { box = box, hotspot = hotspot, description = description, isFarmland = select(6, ...) } end }
 InGameMenuMapFrame = {
-    MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1,
+    MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7 },
     onClickMap = function(self, element, x, z) selected = nil end,
     setMapSelectionItem = function(self, hotspot) selected = hotspot; self.currentHotspot = hotspot; self.selectedFarmland = hotspot ~= nil and "the farmland" or nil end,
     onClickVisitPlace = function(self) selected = "the game's own visit"; return true end,
 }
 dofile("scripts/FieldClick.lua")
 
+local capturedVisit = function() selected = "captured, unpatched visit" end     -- (what the frame took when it was built)
 local function newFrame()
     local sizeEl = { text = "", setText = function(self, t) self.text = t end }
     local valueEl = { text = "", setText = function(self, t) self.text = t end }
@@ -65,6 +66,7 @@ local function newFrame()
         ingameMapBase = { setSelectedHotspot = function(_, h) highlight = h end },
         setMapInputContext = function(_, ...) inputContext = { ... } end,
         refreshContextInput = function() refreshed = refreshed + 1 end,
+        contextActions = { [7] = { callback = capturedVisit } },
     }
     frame.sizeEl, frame.valueEl, frame.label = sizeEl, valueEl, label
     return setmetatable(frame, { __index = InGameMenuMapFrame })
@@ -130,9 +132,19 @@ check("while the map picks a location the click is the game's alone", shown == n
 -- visit
 f = newFrame()
 click(f, 30, 30)
-InGameMenuMapFrame.onClickVisitPlace(f)
-check("Visit goes to a point inside the field (its sample point), the game's own is not run", teleported ~= nil and teleported[1] == 50 and teleported[2] == 77 and teleported[3] == 50)
+check("the frame's captured Visit callback now is the patched one (the game's own would go to the farmland tag)", f.contextActions[7].callback == InGameMenuMapFrame.onClickVisitPlace)
+f.contextActions[7].callback(f)
+check("Visit goes to the \"i\" itself (it lies inside the polygon), the game's own is not run", teleported ~= nil and teleported[1] == 5 and teleported[2] == 77 and teleported[3] == 5)
 check("... leaving the vehicle and closing the menu first", left == 1 and backs == 1)
+
+-- an "i" outside its polygon: Visit goes to the sample point
+local outside = { entry = entry1, isFieldInfoHotspot = true, visitX = 50, visitZ = 50, worldX = 300, worldZ = 300 }
+farmlandOfPoint["300,300"] = nil
+f = newFrame()
+teleported = nil
+f:setMapSelectionItem(outside)
+f.contextActions[7].callback(f)
+check("an \"i\" outside the field's polygon: Visit goes to the sample point inside it", teleported ~= nil and teleported[1] == 50 and teleported[3] == 50)
 
 -- another selection ends ours
 f = newFrame()
