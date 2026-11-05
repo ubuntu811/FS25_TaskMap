@@ -128,18 +128,19 @@ function FieldJobHotspot:render(x, y, rotation, small)
         local textSize = math.max(height * 0.8, self.minFullscreenTextSize)
         local centerX, centerY = x + width * 0.5, y + height * 0.5
         local radius = width * FieldJobHotspot.BADGE_RADIUS_FACTOR
+        local aspect = self.height / self.width                                                              -- (screen units are not square: the same number is wider than tall; this makes the circle round)
         local badge = self.icon
         if badge ~= nil then
             local rim = radius * 1.14
             local blue = FieldJobHotspot.BADGE_COLOR
-            badge:renderCustom(centerX - rim, centerY - rim, rim * 2, rim * 2, 1, 1, 1, a)                  -- (a white rim: the field colours behind can be blue too)
-            badge:renderCustom(centerX - radius, centerY - radius, radius * 2, radius * 2, blue[1], blue[2], blue[3], a)
+            badge:renderCustom(centerX - rim, centerY - rim * aspect, rim * 2, rim * 2 * aspect, 1, 1, 1, a)                 -- (a white rim: the field colours behind can be blue too)
+            badge:renderCustom(centerX - radius, centerY - radius * aspect, radius * 2, radius * 2 * aspect, blue[1], blue[2], blue[3], a)
         else
             drawOutlineCircle2D(centerX + g_pixelSizeX, centerY - g_pixelSizeY, radius, 0.0022, 24, 0, 0, 0, a)
             drawOutlineCircle2D(centerX, centerY, radius, 0.0016, 24, 1, 1, 1, a)
         end
         setTextAlignment(RenderText.ALIGN_CENTER)
-        local iSize = radius * 1.5
+        local iSize = radius * aspect * 1.5
         setTextColor(1, 1, 1, a)
         renderText(centerX, centerY - iSize * 0.36, iSize, "i")
         if hasLetters then
