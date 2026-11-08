@@ -43,6 +43,44 @@ local function edgeDistance(points, x, z)
     return best
 end
 
+local function polygonArea(points)
+    local sum, n = 0, #points
+    local j = n
+    for i = 1, n do
+        sum = sum + (points[j][1] + points[i][1]) * (points[j][2] - points[i][2])
+        j = i
+    end
+    return math.abs(sum) / 2
+end
+
+-- Which field entries get no "i" of their own: an entry whose sample point lies inside the outline of a BIGGER entry (of equal ones the lower id stays) is a piece of that field (ground plowed bit by bit
+-- is first registered as fields of its own, until WAILA's next trace merges them), so the map shows one "i" for the field. Entries without an outline can be hidden but never hide another.
+-- entries: list of { wailaFieldId, sampleX, sampleZ, labelX, labelZ, boundaryPositions }. Returns a set (entry -> true).
+function LabelPlacement.coveredEntries(entries)
+    local areas, hidden = {}, {}
+    for _, entry in ipairs(entries) do
+        local poly = entry.boundaryPositions
+        if poly ~= nil and #poly >= 3 then
+            areas[entry] = polygonArea(poly)
+        end
+    end
+    for _, a in ipairs(entries) do
+        local x, z = a.sampleX or a.labelX, a.sampleZ or a.labelZ
+        if x ~= nil and z ~= nil then
+            for _, b in ipairs(entries) do
+                if b ~= a and areas[b] ~= nil then
+                    local bigger = areas[a] == nil or areas[a] < areas[b] or (areas[a] == areas[b] and (a.wailaFieldId or 0) > (b.wailaFieldId or 0))
+                    if bigger and inside(b.boundaryPositions, x, z) then
+                        hidden[a] = true
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return hidden
+end
+
 -- polygon: list of { x, z } (nil or under 3 points: no polygon); tags: list of { x, z }; homeX, homeZ: the old label position; sampleX, sampleZ: a point WAILA found inside the field (may be nil).
 -- Returns x, z.
 function LabelPlacement.pick(polygon, tags, homeX, homeZ, sampleX, sampleZ)

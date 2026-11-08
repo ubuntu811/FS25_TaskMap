@@ -48,5 +48,21 @@ local x2, z2 = LabelPlacement.pick(square, { { 100, 100 } }, 100, 100, 100, 100)
 x, z = LabelPlacement.pick(square, { { 100, 100 } }, 100, 100, 100, 100)
 check("the same input gives the same spot", x == x2 and z == z2)
 
+-- pieces of a bigger field get no "i"
+do
+    local big = { wailaFieldId = 1, sampleX = 100, sampleZ = 100, boundaryPositions = { { 0, 0 }, { 200, 0 }, { 200, 200 }, { 0, 200 } } }
+    local piece = { wailaFieldId = 2, sampleX = 50, sampleZ = 50, boundaryPositions = { { 40, 40 }, { 60, 40 }, { 60, 60 }, { 40, 60 } } }
+    local noOutline = { wailaFieldId = 3, sampleX = 150, sampleZ = 150 }
+    local far = { wailaFieldId = 4, sampleX = 500, sampleZ = 500, boundaryPositions = { { 400, 400 }, { 600, 400 }, { 600, 600 }, { 400, 600 } } }
+    local hidden = LabelPlacement.coveredEntries({ big, piece, noOutline, far })
+    check("a piece inside a bigger field is hidden", hidden[piece] == true)
+    check("an entry without an outline but inside a field is hidden", hidden[noOutline] == true)
+    check("the big field and a separate field stay", hidden[big] == nil and hidden[far] == nil)
+    local twinA = { wailaFieldId = 5, sampleX = 10, sampleZ = 10, boundaryPositions = { { 0, 0 }, { 20, 0 }, { 20, 20 }, { 0, 20 } } }
+    local twinB = { wailaFieldId = 6, sampleX = 10, sampleZ = 10, boundaryPositions = { { 0, 0 }, { 20, 0 }, { 20, 20 }, { 0, 20 } } }
+    local h2 = LabelPlacement.coveredEntries({ twinA, twinB })
+    check("two identical outlines: the lower id stays", h2[twinA] == nil and h2[twinB] == true)
+    check("an entry without an outline never hides another", next(LabelPlacement.coveredEntries({ noOutline, { wailaFieldId = 9, sampleX = 151, sampleZ = 151 } })) == nil)
+end
 print(string.format("label_placement_test: %d/%d passed", passed, passed + failed))
 os.exit(failed == 0 and 0 or 1)

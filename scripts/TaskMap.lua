@@ -167,8 +167,11 @@ function TaskMap:rebuildAllHotspots()
         return
     end
 
+    local covered = LabelPlacement.coveredEntries(entries)         -- (a piece of a bigger field gets no "i" of its own)
     for _, entry in ipairs(entries) do
-        self:addHotspotIfNeeded(ingameMap, entry)
+        if not covered[entry] then
+            self:addHotspotIfNeeded(ingameMap, entry)
+        end
     end
 end
 
