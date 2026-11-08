@@ -107,3 +107,5 @@ Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 23 checks).
 Not on top of the game's farmland number tags: each field's "i" (and its job letters) is put inside the field's polygon, away from every tag (they sit at the farmland's own spot), away from the field's own edge,
 and near its old position when that is a tie (`LabelPlacement.lua`, tested). It is worked out once per field and kept, a few fields per redraw, so it costs nothing; a field not worked out yet keeps its old spot
 for a moment. Test: `lua5.1 tests/label_placement_test.lua` (8 checks).
+
+**One "i" per field.** Ground that is plowed bit by bit is first registered by WAILA as fields of its own (pieces), until a later trace merges them, and each piece used to get an "i". An entry whose sample point lies inside the outline of a bigger entry (of equal ones the lower id) is now left out of the redraw (`LabelPlacement.coveredEntries`: a point-in-polygon test per redraw, no scanning). Test: `lua tests/label_placement_test.lua`.
