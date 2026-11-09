@@ -92,7 +92,8 @@ frame.mapOverviewSelector = { getState = function() return InGameMenuMapFrame.MA
 mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
 check("the farmland overview: not ours", FieldClick.carrying == nil)
 
--- the game delivers every button event twice in the same instant: the second must not cancel the pick-up
+frame.mapOverviewSelector = { getState = function() return 1 end }
+FieldClick.carrying = nil
 FieldClick.carrying = nil
 g_time = (g_time or 0) + 5; hotspot.badgeTime = g_time
 mouse(5, 5, Input.MOUSE_BUTTON_RIGHT); mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
