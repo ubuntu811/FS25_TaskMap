@@ -11,7 +11,7 @@ g_time = 1000
 g_i18n = { getText = function(_, key) return key end }
 FruitType = { UNKNOWN = 0 }
 InGameMenuMapUtil = {}
-InGameMenuMapFrame = { MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7 },
+InGameMenuMapFrame = { MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7, SET_MARKER = 9 },
     mouseEvent = function() end, onClickMap = function(self, e, x, z) self.clicked = { x, z } end,
     setMapSelectionItem = function() end, onClickVisitPlace = function() end }
 dofile("scripts/MarkerOverrides.lua")

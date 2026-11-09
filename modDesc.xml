@@ -61,6 +61,10 @@ change from the rename itself.
             <en>Field %d</en>
             <de>Feld %d</de>
         </text>
+        <text name="tm_recenter">
+            <en>Recenter label</en>
+            <de>Beschriftung zentrieren</de>
+        </text>
         <text name="tm_crop">
             <en>Crop:</en>
             <de>Frucht:</de>

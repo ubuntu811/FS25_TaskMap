@@ -121,6 +121,48 @@ local function findValueLabel(box)
     return nil
 end
 
+-- The popup's "Tag place" button (it would tag the farmland, not the field) is ours while a field is selected: "Recenter label". The game's own title and callback go back for every other selection.
+function FieldClick.useTagSlot(frame, ours)
+    local action = frame.contextActions ~= nil and frame.contextActions[InGameMenuMapFrame.ACTIONS.SET_MARKER] or nil
+    if action == nil then
+        return
+    end
+    if ours then
+        action.title = text("tm_recenter")
+        action.callback = function() FieldClick.recenter(frame) end
+    else
+        action.title = nil
+        action.callback = frame.onClickTagPlace
+    end
+end
+
+-- Recenter label: the saved spot (if any) is dropped, the automatic one is worked out again, the markers are rebuilt and the popup comes back on the new "i".
+function FieldClick.recenter(frame)
+    local field = frame.tmField
+    local entry = field ~= nil and field.entry or nil
+    if entry == nil or g_taskMap == nil then
+        return
+    end
+    if entry.boundaryPositions ~= nil and MarkerOverrides.clear(entry.boundaryPositions) then
+        MarkerOverrides.save()
+    end
+    if g_taskMap.labelCache ~= nil then
+        g_taskMap.labelCache[entry.wailaFieldId] = nil
+    end
+    g_taskMap:rebuildAllHotspots()
+    say("marker: field %s: recentered", tostring(entry.wailaFieldId))
+    local hotspot = FieldClick.hotspotOf(entry)
+    local ok, shown = false, false
+    if hotspot ~= nil then
+        ok, shown = pcall(FieldClick.show, frame, hotspot)
+    end
+    if not (ok and shown) then
+        frame.tmField = nil
+        FieldClick.useTagSlot(frame, false)
+        frame:setMapSelectionItem(nil)
+    end
+end
+
 -- Select the field's farmland (the game builds its popup), then make the popup the field's.
 function FieldClick.show(frame, hotspot)
     local entry = hotspot.entry
@@ -149,7 +191,8 @@ function FieldClick.show(frame, hotspot)
     if frame.ingameMapBase ~= nil then
         frame.ingameMapBase:setSelectedHotspot(hotspot)
     end
-    frame:setMapInputContext(false, false, false, true, false, false, false, false, false)       -- Visit only (Sell and Tag place would act on the farmland)
+    FieldClick.useTagSlot(frame, true)                  -- (the unused "Tag place" button becomes "Recenter label": its list is rebuilt inside setMapInputContext, so it is set up first)
+    frame:setMapInputContext(false, false, false, true, true, false, false, false, false)       -- Visit and Recenter (Sell and Tag place would act on the farmland)
     frame:refreshContextInput()
     local box = frame.contextBoxFarmland
     InGameMenuMapUtil.showContextBox(box, hotspot, text("tm_fieldTitle", entry ~= nil and entry.wailaFieldId or 0), nil, nil, nil, nil, false, false, false)
@@ -173,7 +216,7 @@ function FieldClick.show(frame, hotspot)
     if action ~= nil then
         action.callback = frame.onClickVisitPlace
     end
-    frame.tmField = { hotspot = farmHotspot, x = visitX, z = visitZ }
+    frame.tmField = { hotspot = farmHotspot, x = visitX, z = visitZ, entry = entry }
     return true
 end
 
@@ -328,6 +371,7 @@ if InGameMenuMapFrame ~= nil and not FieldClick.hooked then
     InGameMenuMapFrame.setMapSelectionItem = Utils.overwrittenFunction(InGameMenuMapFrame.setMapSelectionItem, function(self, superFunc, hotspot)
         if not FieldClick.internal then
             self.tmField = nil
+            FieldClick.useTagSlot(self, false)
             if hotspot ~= nil and hotspot.isFieldInfoHotspot then
                 local ok, shown = pcall(FieldClick.show, self, hotspot)
                 if ok and shown then

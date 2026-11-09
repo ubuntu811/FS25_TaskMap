@@ -46,10 +46,11 @@ local selected = "none"
 local shown, highlight, inputContext, refreshed = nil, nil, nil, 0
 InGameMenuMapUtil = { showContextBox = function(box, hotspot, description, ...) shown = { box = box, hotspot = hotspot, description = description, isFarmland = select(6, ...) } end }
 InGameMenuMapFrame = {
-    MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7 },
+    MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7, SET_MARKER = 9 },
     onClickMap = function(self, element, x, z) selected = nil end,
     setMapSelectionItem = function(self, hotspot) selected = hotspot; self.currentHotspot = hotspot; self.selectedFarmland = hotspot ~= nil and "the farmland" or nil end,
     onClickVisitPlace = function(self) selected = "the game's own visit"; return true end,
+    onClickTagPlace = function(self) selected = "the game's own tag" end,
 }
 dofile("scripts/FieldClick.lua")
 
@@ -66,7 +67,7 @@ local function newFrame()
         ingameMapBase = { setSelectedHotspot = function(_, h) highlight = h end },
         setMapInputContext = function(_, ...) inputContext = { ... } end,
         refreshContextInput = function() refreshed = refreshed + 1 end,
-        contextActions = { [7] = { callback = capturedVisit } },
+        contextActions = { [7] = { callback = capturedVisit }, [9] = { text = "action_tag", callback = function() end } },
     }
     frame.sizeEl, frame.valueEl, frame.label = sizeEl, valueEl, label
     return setmetatable(frame, { __index = InGameMenuMapFrame })
@@ -88,7 +89,7 @@ click(f, 30, 30)
 check("a click inside the polygon opens the popup of that field: its title, not the farmland's", shown ~= nil and shown.description == "Field 7" and shown.isFarmland == false and shown.hotspot == hotspot1)
 check("... the size is the polygon's own area, not the farmland's", f.sizeEl.text == "1.00 ha")
 check("... the second row is the crop, its label no longer says Value", f.valueEl.text == "Wheat, <ui_growthMapGrowing>" and f.label.text == "Crop")
-check("... Visit only: nothing to sell, buy, tag or manage", inputContext ~= nil and inputContext[4] == true and not inputContext[1] and not inputContext[2] and not inputContext[3] and not inputContext[5] and not inputContext[6] and not inputContext[7] and not inputContext[8] and not inputContext[9] and refreshed >= 1)
+check("... Visit and Recenter (the tag slot): nothing to sell, buy or manage", inputContext ~= nil and inputContext[4] == true and not inputContext[1] and not inputContext[2] and not inputContext[3] and inputContext[5] == true and not inputContext[6] and not inputContext[7] and not inputContext[8] and not inputContext[9] and refreshed >= 1)
 check("... no farmland highlight on the map, the \"i\" is the selected hotspot", f.selectedFarmland == nil and f.needsOverlayUpdate == true and highlight == hotspot1)
 
 fieldAt["50,50"] = { fruitTypeIndex = 1, growthState = 5 }
@@ -97,6 +98,21 @@ check("a harvestable crop says so", f.valueEl.text == "Wheat, <ui_growthMapReady
 fieldAt["50,50"] = { fruitTypeIndex = 0, growthState = 0 }
 f = newFrame(); click(f, 30, 30)
 check("nothing growing says so", f.valueEl.text == "nothing growing")
+
+-- Recenter label: the "Tag place" slot of the popup
+f = newFrame(); click(f, 30, 30)
+local slot = f.contextActions[9]
+check("the tag slot is Recenter while the field is selected", slot.title == "<tm_recenter>" and slot.callback ~= nil)
+local cleared, saved, rebuilt = 0, 0, 0
+MarkerOverrides = { clear = function() cleared = cleared + 1; return true end, save = function() saved = saved + 1 end }
+g_taskMap.labelCache = { [7] = { x = 1, z = 1 } }
+g_taskMap.rebuildAllHotspots = function() rebuilt = rebuilt + 1 end
+shown = nil
+slot.callback()
+check("Recenter drops the saved spot and the cached one, rebuilds, and the popup comes back", cleared == 1 and saved == 1 and rebuilt == 1 and g_taskMap.labelCache[7] == nil and shown ~= nil and shown.description == "Field 7")
+f:setMapSelectionItem(nil)
+check("a selection that is not ours gives the slot back to the game", slot.title == nil and slot.callback == f.onClickTagPlace)
+MarkerOverrides = nil
 
 -- a click on the "i"
 farmlandOfPoint["560,520"] = farmlandOfPoint["50,50"]
