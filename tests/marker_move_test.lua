@@ -12,7 +12,7 @@ g_i18n = { getText = function(_, key) return key end }
 FruitType = { UNKNOWN = 0 }
 InGameMenuMapUtil = {}
 InGameMenuMapFrame = { MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7, SET_MARKER = 9 },
-    mouseEvent = function() end, onClickMap = function(self, e, x, z) self.clicked = { x, z } end,
+    mouseEvent = function() end, onFrameClose = function() end, onClickMap = function(self, e, x, z) self.clicked = { x, z } end,
     setMapSelectionItem = function() end, onClickVisitPlace = function() end }
 dofile("scripts/MarkerOverrides.lua")
 dofile("scripts/FieldClick.lua")
@@ -80,12 +80,30 @@ mouse(30, 70, Input.MOUSE_BUTTON_RIGHT)
 check("... and with no saved point nothing more happens", saves == 2 and rebuilt == 1)
 Input.shift = false
 
--- a rebuild while carrying drops the carry
+-- a rebuild of the markers while carrying: the carry moves to the new hotspot of the same field and goes on
 hotspot.worldX, hotspot.worldZ, hotspot.badgeCX, hotspot.badgeCY = 5, 5, 5, 5
 mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
 mouse(80, 80)
-FieldClick.cancelCarry()
-check("a rebuild of the markers ends the carry and the marker goes back", FieldClick.carrying == nil and hotspot.worldX == 5)
+local stash = FieldClick.carrying
+FieldClick.carrying = nil
+local fresh = { entry = entry, isFieldInfoHotspot = true, worldX = 5, worldZ = 5, badgeCX = 5, badgeCY = 5, badgeRX = 2, badgeRY = 2, badgeTime = 1000,
+    setWorldPosition = function(self, x, z) self.worldX, self.worldZ = x, z end }
+g_taskMap.activeHotspots = { fresh }
+FieldClick.resumeCarry(stash)
+check("a rebuild hands the carried i to the new hotspot, still where the cursor had it", FieldClick.carrying ~= nil and FieldClick.carrying.hotspot == fresh and fresh.worldX == 80 and fresh.worldZ == 80)
+mouse(30, 40)
+check("... and it keeps following the cursor", fresh.worldX == 30 and fresh.worldZ == 40)
+frame:onFrameClose()
+check("closing the map drops the carry and the marker goes back", FieldClick.carrying == nil and fresh.worldX == 5 and fresh.worldZ == 5)
+-- the field is gone after the rebuild: nothing to carry
+FieldClick.carrying = { hotspot = hotspot, originX = 5, originZ = 5 }
+hotspot.worldX, hotspot.worldZ = 40, 40
+stash = FieldClick.carrying; FieldClick.carrying = nil
+g_taskMap.activeHotspots = {}
+FieldClick.resumeCarry(stash)
+check("a field that is gone after the rebuild: no carry", FieldClick.carrying == nil)
+g_taskMap.activeHotspots = { hotspot }
+hotspot.worldX, hotspot.worldZ = 5, 5
 
 -- other map screens: the farmland overview and the picking modes are left alone
 frame.mapOverviewSelector = { getState = function() return InGameMenuMapFrame.MAP_FARMLANDS end }

@@ -268,6 +268,29 @@ function FieldClick.cancelCarry()
     end
 end
 
+-- A rebuild of the markers replaces every hotspot: the carried "i" is handed to the new one of the same field and keeps following the cursor. `stash` is what FieldClick.carrying was before the rebuild.
+function FieldClick.resumeCarry(stash)
+    if stash == nil then
+        return
+    end
+    local entry = stash.hotspot.entry
+    local hotspot = FieldClick.hotspotOf(entry)
+    if hotspot == nil and entry ~= nil then
+        for _, h in ipairs(g_taskMap ~= nil and g_taskMap.activeHotspots or {}) do
+            if h.entry ~= nil and h.entry.wailaFieldId == entry.wailaFieldId then
+                hotspot = h
+                break
+            end
+        end
+    end
+    if hotspot == nil or hotspot.entry == nil or hotspot.entry.boundaryPositions == nil then
+        return                                              -- (the field is gone: nothing to carry)
+    end
+    local x, z = stash.hotspot.worldX, stash.hotspot.worldZ
+    FieldClick.carrying = { hotspot = hotspot, originX = hotspot.worldX, originZ = hotspot.worldZ }
+    hotspot:setWorldPosition(x, z)
+end
+
 local function mapIsOurs(frame)
     if frame.isPickingLocation or frame.isPickingRotation then
         return false
@@ -367,6 +390,12 @@ if InGameMenuMapFrame ~= nil and not FieldClick.hooked then
             say("marker move: %s", tostring(err))
         end
     end)
+    -- closing the map is the only thing that drops a carried "i" by itself
+    if InGameMenuMapFrame.onFrameClose ~= nil then
+        InGameMenuMapFrame.onFrameClose = Utils.appendedFunction(InGameMenuMapFrame.onFrameClose, function()
+            FieldClick.cancelCarry()
+        end)
+    end
     -- a click on an "i" selects the field; any other selection (a tag, a vehicle, nothing) ends ours
     InGameMenuMapFrame.setMapSelectionItem = Utils.overwrittenFunction(InGameMenuMapFrame.setMapSelectionItem, function(self, superFunc, hotspot)
         if not FieldClick.internal then

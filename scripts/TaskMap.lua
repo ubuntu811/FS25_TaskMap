@@ -162,8 +162,10 @@ function TaskMap:rebuildAllHotspots()
         return
     end
 
-    if FieldClick ~= nil and FieldClick.cancelCarry ~= nil then
-        FieldClick.cancelCarry()                                                                          -- (a marker carried on the cursor is one of the hotspots about to be replaced)
+    local carried = nil
+    if FieldClick ~= nil then
+        carried = FieldClick.carrying                                                                     -- (a marker carried on the cursor is one of the hotspots about to be replaced: it is handed to the new one below)
+        FieldClick.carrying = nil
     end
     for _, hotspot in ipairs(self.activeHotspots) do
         ingameMap:removeMapHotspot(hotspot)
@@ -173,15 +175,16 @@ function TaskMap:rebuildAllHotspots()
     self.labelsThisRebuild = 0
 
     local entries = g_currentMission.waila.getAll("field")
-    if entries == nil then
-        return
-    end
-
-    local covered = LabelPlacement.coveredEntries(entries)         -- (a piece of a bigger field gets no "i" of its own)
-    for _, entry in ipairs(entries) do
-        if not covered[entry] then
-            self:addHotspotIfNeeded(ingameMap, entry)
+    if entries ~= nil then
+        local covered = LabelPlacement.coveredEntries(entries)     -- (a piece of a bigger field gets no "i" of its own)
+        for _, entry in ipairs(entries) do
+            if not covered[entry] then
+                self:addHotspotIfNeeded(ingameMap, entry)
+            end
         end
+    end
+    if carried ~= nil then
+        FieldClick.resumeCarry(carried)
     end
 end
 
