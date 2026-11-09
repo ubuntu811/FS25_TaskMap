@@ -92,6 +92,15 @@ frame.mapOverviewSelector = { getState = function() return InGameMenuMapFrame.MA
 mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
 check("the farmland overview: not ours", FieldClick.carrying == nil)
 
+-- the game delivers every button event twice in the same instant: the second must not cancel the pick-up
+FieldClick.carrying = nil
+g_time = (g_time or 0) + 5
+mouse(5, 5, Input.MOUSE_BUTTON_RIGHT); mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
+check("a doubled right click still picks the i up", FieldClick.carrying ~= nil)
+g_time = (g_time or 0) + 10
+mouse(5, 5, Input.MOUSE_BUTTON_RIGHT); mouse(5, 5, Input.MOUSE_BUTTON_RIGHT)
+check("a second (doubled) right click later cancels it", FieldClick.carrying == nil)
+
 -- the file part, offline: a set point replaces the earlier one of the same field
 MarkerOverrides.points = {}
 check("a point outside the field is refused", MarkerOverrides.set(square, 150, 5) == false and #MarkerOverrides.points == 0)

@@ -252,6 +252,14 @@ end
 
 -- Every mouse event of the map frame. Returns true when it was one of ours (nothing else depends on it, the game's own handling goes on).
 function FieldClick.onMouse(frame, posX, posY, isDown, isUp, button)
+    -- the game hands the map frame every button event twice in the same instant: the second one must not undo the first (a pick-up and a cancel in one click)
+    if isDown or isUp then
+        local key = string.format("%s|%s|%s|%s|%s", tostring(g_time), tostring(posX), tostring(posY), tostring(isDown), tostring(button))
+        if key == FieldClick.lastEventKey then
+            return false
+        end
+        FieldClick.lastEventKey = key
+    end
     if not mapIsOurs(frame) then
         return false
     end
