@@ -139,6 +139,7 @@ function FieldJobHotspot:render(x, y, rotation, small)
         local centerX, centerY = x + width * 0.5, y + height * 0.5
         local radius = width * FieldJobHotspot.BADGE_RADIUS_FACTOR
         local aspect = self.height / self.width                                                              -- (screen units are not square: the same number is wider than tall; this makes the circle round)
+        self.badgeCX, self.badgeCY, self.badgeRX, self.badgeRY, self.badgeTime = centerX, centerY, radius, radius * aspect, g_time      -- (MarkerOverrides.hitsBadge: where a right click picks the "i" up)
         local badge = badgeOverlay()
         if badge ~= nil then
             local rim = radius * 1.14                                                                        -- (the image has its white rim inside: drawn a little larger than the click circle)

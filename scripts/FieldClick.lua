@@ -211,12 +211,109 @@ function FieldClick.visit(frame)
     return true
 end
 
+-- ===== moving an "i" by hand =====
+-- Right click on an "i" on the big map picks it up: it follows the cursor, but only inside its own field. A left click puts it there (saved, per savegame: MarkerOverrides), another right click puts it back.
+-- Shift + right click on an "i" that is not carried takes it back to the automatic position.
+FieldClick.carrying = nil
+FieldClick.CLICK_SUPPRESS_MS = 300
+
+function FieldClick.cancelCarry()
+    local carried = FieldClick.carrying
+    FieldClick.carrying = nil
+    if carried ~= nil then
+        carried.hotspot:setWorldPosition(carried.originX, carried.originZ)
+    end
+end
+
+local function mapIsOurs(frame)
+    if frame.isPickingLocation or frame.isPickingRotation then
+        return false
+    end
+    if frame.mapOverviewSelector ~= nil and frame.mapOverviewSelector:getState() == InGameMenuMapFrame.MAP_FARMLANDS then
+        return false
+    end
+    return frame.mode == InGameMenuMapFrame.AI_MODE_OVERVIEW
+end
+
+local function cursorWorld(frame, posX, posY)
+    local localX, localY = frame.ingameMap:getLocalPosition(posX, posY)
+    return frame.ingameMap:localToWorldPos(localX, localY)
+end
+
+-- The "i" under the screen point, or nil.
+function FieldClick.badgeAt(posX, posY)
+    for _, hotspot in ipairs(g_taskMap ~= nil and g_taskMap.activeHotspots or {}) do
+        if hotspot.isFieldInfoHotspot and MarkerOverrides.hitsBadge(hotspot, posX, posY, g_time) then
+            return hotspot
+        end
+    end
+    return nil
+end
+
+-- Every mouse event of the map frame. Returns true when it was one of ours (nothing else depends on it, the game's own handling goes on).
+function FieldClick.onMouse(frame, posX, posY, isDown, isUp, button)
+    if not mapIsOurs(frame) then
+        return false
+    end
+    local carried = FieldClick.carrying
+    if carried ~= nil then
+        local polygon = carried.hotspot.entry ~= nil and carried.hotspot.entry.boundaryPositions or nil
+        local x, z = cursorWorld(frame, posX, posY)
+        local insideField = polygon ~= nil and MarkerOverrides.inside(polygon, x, z)
+        if insideField then
+            carried.hotspot:setWorldPosition(x, z)                    -- (it follows the cursor inside the field and stays at the last spot inside when the cursor leaves it)
+        end
+        if isDown and button == Input.MOUSE_BUTTON_LEFT and insideField then
+            FieldClick.carrying = nil
+            if MarkerOverrides.set(polygon, x, z) then
+                MarkerOverrides.save()
+                say("marker: field %s: the \"i\" is at %.0f %.0f now", tostring(carried.hotspot.entry.wailaFieldId), x, z)
+            end
+            FieldClick.suppressClickUntil = g_time + FieldClick.CLICK_SUPPRESS_MS      -- (the click that put it down is not a click on the map)
+        elseif isDown and button == Input.MOUSE_BUTTON_RIGHT then
+            FieldClick.cancelCarry()
+        end
+        return true
+    end
+    if isDown and button == Input.MOUSE_BUTTON_RIGHT then
+        local hotspot = FieldClick.badgeAt(posX, posY)
+        if hotspot == nil then
+            return false
+        end
+        local polygon = hotspot.entry ~= nil and hotspot.entry.boundaryPositions or nil
+        if Input.isKeyPressed(Input.KEY_lshift) then
+            if polygon ~= nil and MarkerOverrides.clear(polygon) then
+                MarkerOverrides.save()
+                say("marker: field %s: the \"i\" is automatic again", tostring(hotspot.entry.wailaFieldId))
+                if g_taskMap ~= nil and g_taskMap.rebuildAllHotspots ~= nil then
+                    g_taskMap:rebuildAllHotspots()
+                end
+            end
+            return true
+        end
+        if polygon ~= nil then
+            FieldClick.carrying = { hotspot = hotspot, originX = hotspot.worldX, originZ = hotspot.worldZ }
+            return true
+        end
+    end
+    return false
+end
+
 if InGameMenuMapFrame ~= nil and not FieldClick.hooked then
     FieldClick.hooked = true
     InGameMenuMapFrame.onClickMap = Utils.appendedFunction(InGameMenuMapFrame.onClickMap, function(self, element, worldX, worldZ)
+        if g_time ~= nil and g_time < (FieldClick.suppressClickUntil or 0) then
+            return
+        end
         local ok, err = pcall(FieldClick.onClickMap, self, worldX, worldZ)
         if not ok then
             say("field click: %s", tostring(err))
+        end
+    end)
+    InGameMenuMapFrame.mouseEvent = Utils.appendedFunction(InGameMenuMapFrame.mouseEvent, function(self, posX, posY, isDown, isUp, button)
+        local ok, err = pcall(FieldClick.onMouse, self, posX, posY, isDown, isUp, button)
+        if not ok then
+            say("marker move: %s", tostring(err))
         end
     end)
     -- a click on an "i" selects the field; any other selection (a tag, a vehicle, nothing) ends ours

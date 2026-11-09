@@ -30,6 +30,7 @@ change from the rename itself.
 
     <extraSourceFiles>
         <sourceFile filename="scripts/FieldJobHotspot.lua" />
+        <sourceFile filename="scripts/MarkerOverrides.lua" />
         <sourceFile filename="scripts/FieldClick.lua" />
         <sourceFile filename="scripts/LabelPlacement.lua" />
         <sourceFile filename="scripts/TaskMap.lua" />

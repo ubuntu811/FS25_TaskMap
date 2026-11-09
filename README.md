@@ -104,6 +104,8 @@ Test: `lua5.1 tests/field_click_test.lua` (a fake map frame, 23 checks).
 
 ### Where the "i" goes
 
+**Move it yourself.** On the big map, **right click** an "i" and it hangs on the cursor (it follows the cursor inside its own field, and stays at the last spot inside when the cursor leaves it). A **left click** puts it down there, and the position is kept for that savegame (`modSettings/FS25_TaskMap/markers_<savegame>.xml`); a **right click** while carrying puts it back where it was. **Shift + right click** an "i" takes it back to the automatic position. The saved point belongs to whichever field's outline contains it, so it survives the field being traced again; if the field is reshaped so the point falls outside, the automatic position is used. Test: `lua5.1 tests/marker_move_test.lua`.
+
 Not on top of the game's farmland number tags: each field's "i" (and its job letters) is put inside the field's polygon, away from every tag (they sit at the farmland's own spot), away from the field's own edge,
 and near its old position when that is a tie (`LabelPlacement.lua`, tested). It is worked out once per field and kept, a few fields per redraw, so it costs nothing; a field not worked out yet keeps its old spot
 for a moment. Test: `lua5.1 tests/label_placement_test.lua` (8 checks).

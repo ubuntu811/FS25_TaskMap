@@ -127,6 +127,13 @@ function TaskMap:addHotspotIfNeeded(ingameMap, entry)
     local hotspot = FieldJobHotspot.new()
     hotspot:setJob(table.concat(letters, " "), color[1], color[2], color[3])
     local labelX, labelZ = self:labelPositionFor(entry)
+    if MarkerOverrides ~= nil then
+        MarkerOverrides.ensureLoaded()
+        local movedX, movedZ = MarkerOverrides.find(entry.boundaryPositions)
+        if movedX ~= nil then
+            labelX, labelZ = movedX, movedZ                                                               -- (the player put it there by hand)
+        end
+    end
     hotspot:setWorldPosition(labelX, labelZ)
     hotspot.entry = entry                                                                              -- (FieldClick: the field this "i" belongs to)
     hotspot.visitX, hotspot.visitZ = entry.sampleX or entry.labelX, entry.sampleZ or entry.labelZ     -- (a point inside the field: where Visit goes)
@@ -155,6 +162,9 @@ function TaskMap:rebuildAllHotspots()
         return
     end
 
+    if FieldClick ~= nil and FieldClick.cancelCarry ~= nil then
+        FieldClick.cancelCarry()                                                                          -- (a marker carried on the cursor is one of the hotspots about to be replaced)
+    end
     for _, hotspot in ipairs(self.activeHotspots) do
         ingameMap:removeMapHotspot(hotspot)
     end
