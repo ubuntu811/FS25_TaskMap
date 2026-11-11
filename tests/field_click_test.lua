@@ -108,8 +108,17 @@ MarkerOverrides = { clear = function() cleared = cleared + 1; return true end, s
 g_taskMap.labelCache = { [7] = { x = 1, z = 1 } }
 g_taskMap.rebuildAllHotspots = function() rebuilt = rebuilt + 1 end
 shown = nil
+local traced = {}
+g_currentMission.waila.rescanField = function(x, z) traced[#traced + 1] = { x, z }; return true end
+g_currentMission.waila.get = function(kind, x, z) return kind == "field" and entry1 or nil end
 slot.callback()
+check("Reset label asks WAILA to trace the field again, from a point inside it", #traced == 1 and FieldClick.pendingReset ~= nil)
 check("Recenter drops the saved spot and the cached one, rebuilds, and the popup comes back", cleared == 1 and saved == 1 and rebuilt == 1 and g_taskMap.labelCache[7] == nil and shown ~= nil and shown.description == "Field 7")
+shown = nil
+FieldClick.finishReset()
+check("when the trace is done: the saved spot and the cached label of the NEW outline are dropped, the markers rebuilt, the popup comes back", cleared == 2 and saved == 2 and rebuilt == 2 and FieldClick.pendingReset == nil and shown ~= nil and shown.description == "Field 7")
+FieldClick.finishReset()
+check("a second message without a request does nothing", rebuilt == 2)
 f:setMapSelectionItem(nil)
 check("a selection that is not ours gives the slot back to the game", slot.title == nil and slot.callback == f.onClickTagPlace)
 MarkerOverrides = nil

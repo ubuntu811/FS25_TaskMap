@@ -136,7 +136,9 @@ function FieldClick.useTagSlot(frame, ours)
     end
 end
 
--- Recenter label: the saved spot (if any) is dropped, the automatic one is worked out again, the markers are rebuilt and the popup comes back on the new "i".
+-- Reset label: the saved spot (if any) is dropped, the field is traced again from the ground as it is now (WAILA: Waila.rescanField; the entries that lie inside the new outline are merged into it, so
+-- a field that was plowed bit by bit has one "i" again), and when that is done (the VEHICLE_LEFT_FIELD message, FieldClick.finishReset) the label is worked out for the fresh outline and the popup comes back on it.
+FieldClick.RESET_TIMEOUT_MS = 15000
 function FieldClick.recenter(frame)
     local field = frame.tmField
     local entry = field ~= nil and field.entry or nil
@@ -149,9 +151,20 @@ function FieldClick.recenter(frame)
     if g_taskMap.labelCache ~= nil then
         g_taskMap.labelCache[entry.wailaFieldId] = nil
     end
+    local waila = g_currentMission ~= nil and g_currentMission.waila or nil
+    local x, z = entry.sampleX or entry.labelX, entry.sampleZ or entry.labelZ
+    if waila ~= nil and waila.rescanField ~= nil and x ~= nil and waila.rescanField(x, z) then
+        FieldClick.pendingReset = { frame = frame, x = x, z = z, since = g_time or 0 }
+        say("marker: field %s: traced again from the ground as it is now", tostring(entry.wailaFieldId))
+    end
     g_taskMap:rebuildAllHotspots()
-    say("marker: field %s: recentered", tostring(entry.wailaFieldId))
-    local hotspot = FieldClick.hotspotOf(entry)
+    say("marker: field %s: label reset", tostring(entry.wailaFieldId))
+    FieldClick.showAgain(frame, entry)
+end
+
+-- The popup back on the "i" of this field (or of the field now at its place).
+function FieldClick.showAgain(frame, entry)
+    local hotspot = entry ~= nil and FieldClick.hotspotOf(entry) or nil
     local ok, shown = false, false
     if hotspot ~= nil then
         ok, shown = pcall(FieldClick.show, frame, hotspot)
@@ -160,6 +173,33 @@ function FieldClick.recenter(frame)
         frame.tmField = nil
         FieldClick.useTagSlot(frame, false)
         frame:setMapSelectionItem(nil)
+    end
+end
+
+-- The trace asked for by "Reset label" is done (TaskMap:onVehicleLeftField): the field at that place has its fresh outline, its saved spot and worked-out label are dropped, and the popup follows.
+function FieldClick.finishReset()
+    local pending = FieldClick.pendingReset
+    if pending == nil then
+        return
+    end
+    FieldClick.pendingReset = nil
+    if (g_time or 0) - pending.since > FieldClick.RESET_TIMEOUT_MS then
+        return
+    end
+    local waila = g_currentMission ~= nil and g_currentMission.waila or nil
+    local entry = waila ~= nil and waila.get ~= nil and waila.get("field", pending.x, pending.z) or nil
+    if entry ~= nil and entry.boundaryPositions ~= nil and MarkerOverrides.clear(entry.boundaryPositions) then
+        MarkerOverrides.save()
+    end
+    if entry ~= nil and g_taskMap ~= nil and g_taskMap.labelCache ~= nil then
+        g_taskMap.labelCache[entry.wailaFieldId] = nil
+    end
+    if g_taskMap ~= nil then
+        g_taskMap:rebuildAllHotspots()
+    end
+    say("marker: the field at %.0f %.0f has its fresh outline%s", pending.x, pending.z, entry ~= nil and "" or " (no field there any more)")
+    if pending.frame ~= nil and pending.frame.tmField ~= nil then
+        FieldClick.showAgain(pending.frame, entry)
     end
 end
 

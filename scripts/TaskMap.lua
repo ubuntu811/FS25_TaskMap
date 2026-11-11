@@ -193,6 +193,12 @@ end
 -- pass.
 function TaskMap:onVehicleLeftField(vehicleOrPlayer, entry)
     self:rebuildAllHotspots()
+    if FieldClick ~= nil and FieldClick.finishReset ~= nil then
+        local ok, err = pcall(FieldClick.finishReset)
+        if not ok then
+            print("[TaskMap] reset label: " .. tostring(err))
+        end
+    end
 end
 
 -- Real, explicit fix, confirmed live: this used to call a single
