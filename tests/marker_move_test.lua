@@ -5,14 +5,14 @@ local function check(name, ok) if ok then passed = passed + 1 else failed = fail
 local said = {}
 print = function(text) said[#said + 1] = text end
 
-Utils = { appendedFunction = function(old, new) return function(...) local r = old(...); new(...); return r end end, overwrittenFunction = function(old, new) return function(self, ...) return new(self, old, ...) end end }
+Utils = { appendedFunction = function(old, new) return function(...) old(...); new(...) end end, overwrittenFunction = function(old, new) return function(self, ...) return new(self, old, ...) end end }
 Input = { MOUSE_BUTTON_LEFT = 1, MOUSE_BUTTON_RIGHT = 3, KEY_lshift = 304, isKeyPressed = function(key) return Input.shift == true and key == 304 end }
 g_time = 1000
 g_i18n = { getText = function(_, key) return key end }
 FruitType = { UNKNOWN = 0 }
 InGameMenuMapUtil = {}
 InGameMenuMapFrame = { MAP_FARMLANDS = 5, AI_MODE_OVERVIEW = 1, ACTIONS = { VISIT_PLACE = 7, SET_MARKER = 9 },
-    mouseEvent = function() end, onFrameClose = function() end, onClickMap = function(self, e, x, z) self.clicked = { x, z } end,
+    mouseEvent = function() return true end, onFrameClose = function() end, onClickMap = function(self, e, x, z) self.clicked = { x, z } end,
     setMapSelectionItem = function() end, onClickVisitPlace = function() end }
 dofile("scripts/MarkerOverrides.lua")
 dofile("scripts/FieldClick.lua")
@@ -29,8 +29,9 @@ g_taskMap = { activeHotspots = { hotspot }, rebuildAllHotspots = function() rebu
 -- the fake map: screen position = world position
 local frame = setmetatable({ mode = 1, mapOverviewSelector = { getState = function() return 1 end },
     ingameMap = { getLocalPosition = function(_, x, y) return x, y end, localToWorldPos = function(_, x, y) return x, y end } }, { __index = InGameMenuMapFrame })
-local function mouse(x, y, button, down) frame:mouseEvent(x, y, down == nil and (button ~= nil) or down, false, button) end
+local function mouse(x, y, button, down) return frame:mouseEvent(x, y, down == nil and (button ~= nil) or down, false, button) end
 
+check("the map frame's mouseEvent still answers \"event used\" (an appended hook drops it: a click on a dialog button then fell through to the map and picked the destination)", mouse(300, 300, 1, true) == true)
 check("the hit test: on the badge, a little beyond it, and far away", MarkerOverrides.hitsBadge(hotspot, 5, 5, 1000) and MarkerOverrides.hitsBadge(hotspot, 7, 5, 1000) and not MarkerOverrides.hitsBadge(hotspot, 20, 5, 1000))
 check("... a badge not drawn lately does not count", not MarkerOverrides.hitsBadge(hotspot, 5, 5, 2000))
 

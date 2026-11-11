@@ -384,11 +384,14 @@ if InGameMenuMapFrame ~= nil and not FieldClick.hooked then
             say("field click: %s", tostring(err))
         end
     end)
-    InGameMenuMapFrame.mouseEvent = Utils.appendedFunction(InGameMenuMapFrame.mouseEvent, function(self, posX, posY, isDown, isUp, button)
+    -- (overwritten, not appended: the frame's mouseEvent returns whether the event was used, and an appended function drops that answer: a click on a dialog button then fell through to the map)
+    InGameMenuMapFrame.mouseEvent = Utils.overwrittenFunction(InGameMenuMapFrame.mouseEvent, function(self, superFunc, posX, posY, isDown, isUp, button, eventUsed)
+        local used = superFunc(self, posX, posY, isDown, isUp, button, eventUsed)
         local ok, err = pcall(FieldClick.onMouse, self, posX, posY, isDown, isUp, button)
         if not ok then
             say("marker move: %s", tostring(err))
         end
+        return used
     end)
     -- closing the map is the only thing that drops a carried "i" by itself
     if InGameMenuMapFrame.onFrameClose ~= nil then
