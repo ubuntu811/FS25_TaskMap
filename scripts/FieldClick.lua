@@ -159,7 +159,14 @@ function FieldClick.recenter(frame)
     end
     g_taskMap:rebuildAllHotspots()
     say("marker: field %s: label reset", tostring(entry.wailaFieldId))
-    FieldClick.showAgain(frame, entry)
+    FieldClick.closePopup(frame)                          -- (the popup closes: the new "i" appears on the map when the trace is done)
+end
+
+-- The popup closed, the selection gone.
+function FieldClick.closePopup(frame)
+    frame.tmField = nil
+    FieldClick.useTagSlot(frame, false)
+    frame:setMapSelectionItem(nil)
 end
 
 -- The popup back on the "i" of this field (or of the field now at its place).
@@ -198,9 +205,6 @@ function FieldClick.finishReset()
         g_taskMap:rebuildAllHotspots()
     end
     say("marker: the field at %.0f %.0f has its fresh outline%s", pending.x, pending.z, entry ~= nil and "" or " (no field there any more)")
-    if pending.frame ~= nil and pending.frame.tmField ~= nil then
-        FieldClick.showAgain(pending.frame, entry)
-    end
 end
 
 -- Select the field's farmland (the game builds its popup), then make the popup the field's.
